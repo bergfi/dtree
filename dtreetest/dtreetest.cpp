@@ -1,6 +1,6 @@
 #include <getopt.h>
 
-#include <dtree/dtreetest.h>
+#include <dtreetest/dtreetest.h>
 #include <libfrugi/Settings.h>
 
 #include "wrappers.h"
@@ -11,8 +11,10 @@ void runTest(std::string const& name) {
 
     Settings& settings = Settings::global();
 
-    if(name == "dtree") {
-        dtreeTest<dtree<HashSet<RehasherExit, Linear>>>(settings["buckets_scale"].asUnsignedValue()).go();
+    if(name == "dtree.s") {
+        dtreeTest<dtree<SingleLevelhashSet<HashSet<RehasherExit, Linear> > > > (settings["buckets_scale"].asUnsignedValue()).go();
+    } else if(name == "dtree.m") {
+        dtreeTest<dtree<MultiLevelhashSet<HashSet<RehasherExit, Linear> > > > (settings["buckets_scale"].asUnsignedValue()).go();
     } else {
         printf("No compression data structure selected\n");
     }
@@ -30,13 +32,6 @@ int main(int argc, char** argv) {
     settings["page_size_scale"] = 28;
     settings["stats"] = 0;
     settings["bars"] = 128;
-
-    struct option long_options[] =
-    {
-//        {"stats",   no_argument, &STATS, 1},
-        {0, 0, 0, 0}
-    };
-    int option_index = 0;
 
     int c = 0;
     while ((c = getopt(argc, argv, "i:c:d:s:t:T:p:-:")) != -1) {

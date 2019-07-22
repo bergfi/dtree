@@ -1,7 +1,93 @@
 #pragma once
 
+#include <cassert>
 #include <cstring>
+#include <array>
+#include <vector>
 #include <dtree/hashset.h>
+
+template<typename HS>
+class SingleLevelhashSet {
+public:
+    SingleLevelhashSet(size_t scale): _hashSet(scale) {
+    }
+
+    size_t scale() {
+        return _hashSet._scale;
+    }
+
+protected:
+    __attribute__((always_inline))
+    uint32_t storage_fop(uint64_t v, size_t) {
+        return _hashSet.insert(v);
+    }
+
+    __attribute__((always_inline))
+    uint64_t storage_find(uint64_t v, size_t) {
+        return _hashSet.find(v);
+    }
+
+    __attribute__((always_inline))
+    uint64_t storage_get(uint32_t idx, size_t) {
+        //assert(idx && "construct called with 0-idx, indicates possible trouble");
+        return _hashSet.get(idx);
+    }
+
+    typename HS::mapStats const& getStats() {
+        return _hashSet->getStats();
+    }
+protected:
+    HS _hashSet;
+};
+
+template<typename HS>
+class MultiLevelhashSet {
+public:
+    MultiLevelhashSet(size_t scale, size_t maps=2): _mask(maps-1), _hashSets() {
+        //assert( (1U << (31 - __builtin_clz(maps))) - 1 == _mask && "Need power of two");
+        assert( ((maps | _mask) == (maps + _mask)) && "Need power of two");
+        _hashSets.reserve(maps);
+        for(;maps--;) {
+            _hashSets.emplace_back(scale);
+        }
+    }
+
+    size_t scale() {
+        return _hashSets[0]._scale;
+    }
+
+protected:
+    __attribute__((always_inline))
+    uint32_t storage_fop(uint64_t v, size_t level) {
+        level &= _mask;
+        return _hashSets[level].insert(v);
+    }
+
+    __attribute__((always_inline))
+    uint64_t storage_find(uint64_t v, size_t level) {
+        level &= _mask;
+        return _hashSets[level].find(v);
+    }
+
+    __attribute__((always_inline))
+    uint64_t storage_get(uint32_t idx, size_t level) {
+//        assert(idx && "construct called with 0-idx, indicates possible trouble");
+        level &= _mask;
+        return _hashSets[level].get(idx);
+    }
+
+    typename HS::mapStats const& getStats() {
+
+        typename HS::mapStats stats;
+        for(auto& h: _hashSets) {
+            stats += h.getStats();
+        }
+        return stats;
+    }
+protected:
+    size_t _mask;
+    std::vector<HS> _hashSets;
+};
 
 /**
  * @class dtree
@@ -147,8 +233,8 @@
  * The cost to store is 120 bytes, since we store the [a][b] part at a unique index in an array.
  * The vectors mapped are 128 bytes in total, so we are starting to see a small compression.
  */
-template<typename HS>
-class dtree {
+template<typename Storage>
+class dtree: public Storage {
 public:
 
     static constexpr bool REPORT = 0;
@@ -166,23 +252,26 @@ public:
     using PartialIndex = uint32_t;
 
     /**
-     * MappedIndex is a unique 32-bit mapping to a unique Index that maps
-     * to a vector. Using this, the index to a vector can be stored in 32-bit,
-     * without losing the length specification.
+     * RootIndex is used to index a root node. It is 32-bit:
+     * [ 8                  ][ 16              ][ 8         ]
+     * [ SuperIndex to tree ][ additional info ][ user info ]
      */
-    using MappedIndex = uint32_t;
+    using RootIndex = uint32_t;
 
     using SparseOffset = uint32_t;
 
 public:
 
-    static const Index NotFound = 0;
+    static const Index NotFound = 0ULL;
 
     /**
      * @brief Construct a new instance.
      * @param scale The underlying hash map can maximally hold 2^scale 64-bit entries.
+     * @param rootIndexScale The underlying hash map can maximally hold 2^rootIndexScale 64-bit entries.
      */
-    dtree(size_t scale): _hashSet(scale) {
+    dtree(size_t scale): Storage(scale) {
+        assert(scale > 0);
+        assert(scale <= 32);
     }
 
     /**
@@ -210,21 +299,8 @@ public:
      */
     Index insert(uint32_t* data, uint32_t length) {
         uint64_t result = length == 0 ? 0 : ((uint64_t)deconstruct(data, length)) | (((uint64_t)length) << 34);
-        if(REPORT) printBuffer("Inserted", (char*)data, length, result);
+        if(REPORT) printBuffer("Inserted", (char*)data, length << 2, result);
         return result;
-    }
-
-    /**
-     * @brief Deconstructs the specified vector and returns a mapped index.
-     * The mapped index can be constructed into a normal @c Index using @c getIndex().
-     * When used this way, the mapped index uniquely identifies the specified vector.
-     * @param data The data with length @c length to insert.
-     * @param length Length of @c data in number of 32bit units.
-     * @return Unique mapped index that can be used to retrieve the data.
-     */
-    MappedIndex insertMapped(uint32_t* data, uint32_t length) {
-        uint64_t result = insert(data, length);
-        return deconstruct(result);
     }
 
     /**
@@ -251,15 +327,6 @@ public:
         construct(idx, idx >> 34, buffer);
         if(REPORT) printBuffer("Constructed", (char*)buffer, idx >> 32, idx);
         return false;
-    }
-
-    /**
-     * @brief Returns the Index from the MappedIndex
-     * @param idx The MappedIndex of which the full Index is wanted
-     * @return The Index the specified MappedIndex maps to.
-     */
-    Index getIndex(MappedIndex idx) {
-        return _hashSet.get(idx);
     }
 
     /**
@@ -318,19 +385,6 @@ public:
     }
 
     /**
-     * @brief Constructs the entire vector using the specified MappedIndex. Make sure the length of the vector
-     * is a multiple of 4 bytes, otherwise use @c getBytesMapped().
-     * @param idx Index of the vector to construct.
-     * @param buffer Buffer where the vector will be stored.
-     * @return false
-     * @deprecated Buffer size cannot be known without first constructing the Index from the MappedIndex,
-     *             so this wrapper adds an extra getIndex(idx)
-     */
-    bool getMapped(MappedIndex idx, uint32_t* buffer) {
-        return get(getIndex(idx), buffer);
-    }
-
-    /**
      * @brief Returns a single 64bit part of the vector associated with @c idx.
      * @param idx Index of the vector of which a 64bit part is desired.
      * @param offset Offset within the vector to the desired single 64bit entry. MUST be multiple of 2.
@@ -353,7 +407,7 @@ public:
      * @param deltaLength The length of the delta, in 32-bit units
      * @return A new unique index that can be used to retrieve the new vector.
      */
-    Index delta(Index idx, uint32_t offset, uint32_t* deltaData, uint32_t deltaLength) {
+    Index delta(Index idx, uint32_t offset, const uint32_t* deltaData, uint32_t deltaLength) {
         uint64_t result = ((uint64_t)deltaApply(idx, idx >> 34, offset, deltaLength, deltaData)) | (idx & 0xFFFFFFFF00000000ULL);
         if(REPORT) {
             uint32_t buffer[idx >> 34];
@@ -474,16 +528,14 @@ public:
     }
 
     template<typename CONTAINER>
-    void getDensityStats(size_t bars, CONTAINER& elements) {
-        _hashSet.getDensityStats(bars, elements);
+    void getDensityStats(size_t bars, CONTAINER& elements, size_t map) {
+//        _hashSets[map].getDensityStats(bars, elements);
     }
 
     template<typename CONTAINER>
-    void getProbeStats(size_t bars, CONTAINER& elements) {
-        _hashSet.getProbeStats(bars, elements);
+    void getProbeStats(size_t bars, CONTAINER& elements, size_t map) {
+//        _hashSets[map].getProbeStats(bars, elements);
     }
-
-    uint64_t scale() const { return _hashSet._scale; }
 
     void printBuffer(const char* action, char* buffer, uint32_t length, uint64_t result) {
         printf("%s ", action);
@@ -554,22 +606,53 @@ public:
 //    }
 
 private:
+
     __attribute__((always_inline))
-    uint32_t deconstruct(uint64_t v) {
-        if(v==0) return 0;
-        return _hashSet.insert(v);
+    size_t lengthToLevel(size_t length) {
+        // length -> __builtin_clz(length-1) -> level
+        //      1 ->                      32 ->   n/a
+        //      2 ->                      31 ->     0
+        //    3-4 ->                      30 ->     1
+        //    5-8 ->                      29 ->     2
+        //   9-16 ->                      28 ->     3
+        return 31 - __builtin_clz(length-1);
+    }
+
+    __attribute__((always_inline))
+    uint32_t deconstruct(uint64_t v, size_t level) {
+        if(v==0ULL) return 0;
+        uint32_t idx = this->template storage_fop(v, level);
+        assert(idx && "hash table full");
+        return idx;
+    }
+
+    __attribute__((always_inline))
+    uint64_t findRecursing(uint64_t v, size_t level) {
+        if(v==0ULL) return 0ULL;
+        return this->template storage_find(v, level);
+    }
+
+    __attribute__((always_inline))
+    uint64_t construct(uint32_t idx, size_t level) {
+        if(idx == 0) return 0;
+        uint64_t mapped = this->template storage_get(idx, level);
+        if(REPORT) printf("Got %8x(%u) -> %16zx\n", idx, 8, mapped);
+        return mapped;
     }
 
     uint32_t deconstruct(uint32_t* data, uint32_t length) {
         if(length == 1) {
             return *data;
         } else if (length == 2) {
-            return deconstruct(*(uint64_t*)data);
+            return deconstruct(*(uint64_t*)data, 0);
         }
-        uint32_t leftLength = 1 << (31 - __builtin_clz(length-1));
+
+        size_t level = lengthToLevel(length);
+
+        uint32_t leftLength = 1 << level;
         uint32_t l = deconstruct(data, leftLength);
         uint32_t r = deconstruct(data+leftLength, length-leftLength);
-        return deconstruct(((uint64_t)r) << 32 | (uint64_t)l);
+        return deconstruct(((uint64_t)r) << 32 | (uint64_t)l, level);
     }
 
     uint32_t deconstructBytes(uint8_t* data, uint32_t length) {
@@ -578,27 +661,24 @@ private:
             memmove(&d, data, length);
             return d;
         } else if(length <= 8) {
-            return deconstruct(*(uint64_t*)data);
+            return deconstruct(*(uint64_t*)data, 0);
         }
-        uint32_t leftLength = 1 << (31 - __builtin_clz(length-1));
+        size_t level = lengthToLevel(length);
+        uint32_t leftLength = 1 << level;
         uint32_t l = deconstructBytes(data, leftLength);
         uint32_t r = deconstructBytes(data+leftLength, length-leftLength);
-        return deconstruct(((uint64_t)r) << 32 | (uint64_t)l);
-    }
-
-    __attribute__((always_inline))
-    uint64_t findRecursing(uint64_t v) {
-        if(v==0) return 0;
-        return _hashSet.find(v);
+        return deconstruct(((uint64_t)r) << 32 | (uint64_t)l, level - 2);
     }
 
     uint64_t findRecursing(uint32_t* data, uint32_t length) {
         if(length == 1) {
             return *data;
         } else if (length == 2) {
-            return findRecursing(*(uint64_t*)data);
+            return findRecursing(*(uint64_t*)data, 0);
         }
-        uint32_t leftLength = 1 << (31 - __builtin_clz(length-1));
+
+        size_t level = lengthToLevel(length);
+        uint32_t leftLength = 1 << level;
         uint64_t l = findRecursing(data, leftLength);
         if(l == 0x100000000ULL) {
             return 0x100000000ULL;
@@ -607,15 +687,16 @@ private:
         if(r == 0x100000000ULL) {
             return 0x100000000ULL;
         }
-        return findRecursing(((uint64_t)r) << 32 | (uint64_t)l);
+        return findRecursing(((uint64_t)r) << 32 | (uint64_t)l, level);
     }
 
     uint64_t getSingleRecursive(uint32_t idx, uint32_t length, uint32_t offset) {
-        uint64_t mapped = _hashSet.get(idx);
         if(length == 2) {
-            return mapped;
+            return construct(idx, 0);
         }
-        uint32_t leftLength = 1 << (31 - __builtin_clz(length-1));
+        size_t level = lengthToLevel(length);
+        uint64_t mapped = construct(idx, level);
+        uint32_t leftLength = 1 << level;
         if(offset < leftLength) {
             return getSingle(mapped, leftLength, offset);
         } else {
@@ -635,14 +716,15 @@ private:
             return;
         }
 
-        uint64_t mapped = _hashSet.get(idx);
-        if(REPORT) printf("Got %8x(%u) -> %16zx\n", idx, length, mapped);
-
         if(length == 2) {
-            *(uint64_t*)buffer = mapped;
+            *(uint64_t*)buffer = construct(idx, 0);
             return;
         }
-        uint32_t leftLength = 1 << (31 - __builtin_clz(length-1));
+
+        size_t level = lengthToLevel(length);
+        uint64_t mapped = construct(idx, level);
+
+        uint32_t leftLength = 1 << level;
         construct(mapped & 0xFFFFFFFFULL, leftLength, buffer);
 
         // If there is a part remaining
@@ -653,7 +735,7 @@ private:
 
     void constructPartial(uint32_t idx, uint32_t length, uint32_t offset, uint32_t wantedLength, uint32_t* buffer) {
         if(REPORT) {
-            for(int i=__builtin_clz(1 << (31 - __builtin_clz(length-1)))-26; i--;) printf("    ");
+            for(int i=__builtin_clz(1 << lengthToLevel(length))-26; i--;) printf("    ");
             printf("\033[35mconstructPartial\033[0m(%x, %u, %u, %u)\n", idx, length, offset, wantedLength);
         }
         if(length == 1) {
@@ -667,10 +749,8 @@ private:
             return;
         }
 
-        uint64_t mapped = _hashSet.get(idx);
-        if(REPORT) printf("Got %8x(%u) -> %16zx\n", idx, length, mapped);
-
         if(length == 2) {
+            uint64_t mapped = construct(idx, 0);
             if(wantedLength == 2) {
                 *(uint64_t*)buffer = mapped;
             } else {
@@ -683,7 +763,10 @@ private:
             return;
         }
 
-        uint32_t leftLength = 1 << (31 - __builtin_clz(length-1));
+        size_t level = lengthToLevel(length);
+        uint64_t mapped = construct(idx, level);
+
+        uint32_t leftLength = 1 << level;
 
         if(offset < leftLength) {
 //            if(offset + wantedLength < leftLength) {
@@ -708,8 +791,8 @@ private:
             return;
         }
 
-        uint64_t mapped = _hashSet.get(idx);
         if(length == 2) {
+            uint64_t mapped = construct(idx, 0);
             if(offsets == 2) {
                 *(uint64_t*)buffer = mapped;
             } else if (offset[0] == internalOffset) {
@@ -720,7 +803,9 @@ private:
             return;
         }
 
-        uint32_t leftLength = 1 << (31 - __builtin_clz(length-1));
+        size_t level = lengthToLevel(length);
+        uint64_t mapped = construct(idx, level);
+        uint32_t leftLength = 1 << level;
 
         uint32_t leftOffsets = 0;
         uint32_t offsetLeft = internalOffset + leftLength;
@@ -740,7 +825,7 @@ private:
     void constructSparse(uint32_t idx, uint32_t length, uint32_t internalOffset, uint32_t* buffer, uint32_t offsets, SparseOffset* offset) {
 
         if(REPORT) {
-            for(int i=__builtin_clz(1 << (31 - __builtin_clz(length-1)))-26; i--;) printf("    ");
+            for(int i=__builtin_clz(1 << lengthToLevel(length))-26; i--;) printf("    ");
             printf("\033[36mconstructSparse\033[0m(%x, %u, %u, %p, [", idx, length, internalOffset >> 8, buffer);
             uint32_t* o = offset;
             uint32_t* e = offset + offsets;
@@ -757,14 +842,15 @@ private:
             return;
         }
 
-        uint64_t mapped = _hashSet.get(idx);
-
         if(length == 2) {
-            *(uint64_t*)buffer = mapped;
+            *(uint64_t*)buffer = construct(idx, 0);
             return;
         }
 
-        uint32_t leftLength = 1 << (31 - __builtin_clz(length-1));
+        size_t level = lengthToLevel(length);
+        uint64_t mapped = construct(idx, level);
+
+        uint32_t leftLength = 1 << level;
         uint32_t leftLength2 = leftLength << 8;
 
         uint32_t leftOffsets = 0;
@@ -830,12 +916,14 @@ private:
             return *(uint32_t*)data;
         }
 
-        uint64_t mapped = _hashSet.get(idx);
         if(length == 2) {
             return deconstruct(*(uint64_t*)data);
         }
 
-        uint32_t leftLength = 1 << (31 - __builtin_clz(length-1));
+        size_t level = lengthToLevel(length);
+        uint64_t mapped = construct(idx, level);
+
+        uint32_t leftLength = 1 << level;
 
         uint32_t leftOffsets = 0;
         while(leftOffsets < offsets && offset[leftOffsets] < leftLength) ++leftOffsets;
@@ -857,7 +945,7 @@ private:
     uint32_t deltaSparseApply(uint32_t idx, uint32_t length, uint32_t* buffer, uint32_t offsets, SparseOffset* offset) {
 
         if(REPORT) {
-            for(int i=__builtin_clz(1 << (31 - __builtin_clz(length-1)))-26; i--;) printf("    ");
+            for(int i=__builtin_clz(1 << lengthToLevel(length))-26; i--;) printf("    ");
             printf("deltaSparseApply(%u, %u, [", idx, length);
             uint32_t* o = offset;
             uint32_t* e = offset + offsets;
@@ -873,9 +961,10 @@ private:
             return deltaApply(idx, length, offset[0] >> 8, offset[0] & 0xFFULL, buffer);
         }
 
-        uint64_t mapped = _hashSet.get(idx);
+        size_t level = lengthToLevel(length);
+        uint64_t mapped = construct(idx, level);
 
-        uint32_t leftLength = 1 << (31 - __builtin_clz(length-1));
+        uint32_t leftLength = 1 << level;
         uint32_t leftLength2 = leftLength << 8;
 
         uint32_t leftOffsets = 0;
@@ -934,13 +1023,13 @@ private:
         } else {
             rightIndex = mapped & 0xFFFFFFFF00000000ULL;
         }
-        return deconstruct(leftIndex | rightIndex);
+        return deconstruct(leftIndex | rightIndex, level);
     }
 
     uint32_t deltaSparseApply(uint32_t idx, uint32_t length, uint32_t internalOffset, uint32_t* buffer, uint32_t offsets, uint32_t* offset, uint32_t stride) {
 
         if(REPORT) {
-            for(int i=__builtin_clz(1 << (31 - __builtin_clz(length-1)))-26; i--;) printf("    ");
+            for(int i=__builtin_clz(1 << lengthToLevel(length))-26; i--;) printf("    ");
             printf("deltaSparseApply(%u, %u, %u, %p, [", idx, length, internalOffset, buffer);
             uint32_t* o = offset;
             uint32_t* e = offset + offsets * stride;
@@ -966,12 +1055,13 @@ private:
         }
 
         if(length == 2) {
-            return deconstruct(*(uint64_t*)(buffer + internalOffset - offset[0]));
+            return deconstruct(*(uint64_t*)(buffer + internalOffset - offset[0]), 0);
         }
 
-        uint64_t mapped = _hashSet.get(idx);
+        size_t level = lengthToLevel(length);
+        uint64_t mapped = construct(idx, level);
 
-        uint32_t leftLength = 1 << (31 - __builtin_clz(length-1));
+        uint32_t leftLength = 1 << level;
 
         uint32_t leftOffsets = 0;
         uint32_t leftOffsetSizeTotal = 0;
@@ -1021,14 +1111,14 @@ private:
         } else {
             rightIndex = mapped & 0xFFFFFFFF00000000ULL;
         }
-        return deconstruct(leftIndex | rightIndex);
+        return deconstruct(leftIndex | rightIndex, level);
     }
 
-    uint32_t deltaApply(uint32_t idx, uint32_t length, uint32_t offset, uint32_t deltaLength, uint32_t* data) {
+    uint32_t deltaApply(uint32_t idx, uint32_t length, uint32_t offset, uint32_t deltaLength, const uint32_t* data) {
 
         if(REPORT) {
-            for(int i=__builtin_clz(1 << (31 - __builtin_clz(length-1)))-26; i--;) printf("    ");
-            printf("deltaApply(%u, %u, %u, %u, %p)\n", idx, length, offset, deltaLength, data);
+            for(int i=__builtin_clz(1 << lengthToLevel(length))-26; i--;) printf("    ");
+            printf("deltaApply(%u, %uB, %uB, %uB, %p)\n", idx, length << 2, offset << 2, deltaLength << 2, data);
         }
 
         if(length == 1) {
@@ -1036,15 +1126,13 @@ private:
             return *data;
         }
 
-        uint64_t mapped = _hashSet.get(idx);
-        if(REPORT) printf("Got %8x(%u) -> %16zx\n", idx, length, mapped);
-
         if(length == 2) {
+            uint64_t mapped = construct(idx, 0);
 
             // This is >= instead of == because in some edge cases deltaApply() may be called with a
             // deltaLength larger than the length, in which case only length bytes should be copied.
             if (deltaLength >= 2) {
-                return deconstruct(*(uint64_t*)data);
+                return deconstruct(*(uint64_t*)data, 0);
             } else {
                 if(offset == 0) {
                     mapped &= 0xFFFFFFFF00000000ULL;
@@ -1053,11 +1141,14 @@ private:
                     mapped &= 0x00000000FFFFFFFFULL;
                     mapped |= ((uint64_t)*data) << 32;
                 }
-                return deconstruct(mapped);
+                return deconstruct(mapped, 0);
             }
         }
 
-        uint32_t leftLength = 1 << (31 - __builtin_clz(length-1));
+        size_t level = lengthToLevel(length);
+        uint64_t mapped = construct(idx, level);
+
+        uint32_t leftLength = 1 << level;
         uint64_t mappedNew = 0;
 
         if(offset < leftLength) {
@@ -1080,7 +1171,7 @@ private:
         if(mapped == mappedNew) {
             return idx;
         } else {
-            return deconstruct(mappedNew);
+            return deconstruct(mappedNew, level);
         }
     }
 
@@ -1091,16 +1182,17 @@ private:
             return idx;
         }
 
-        uint64_t mapped = _hashSet.get(idx);
-        if(REPORT) printf("Got %8zx(%u) -> %16zx\n", idx, lengthInBytes, mapped);
-
         if(lengthInBytes == 8) {
+            uint64_t mapped = construct(idx, 0);
             uint32_t offsetInBits = (offsetInBytes*8);
             memmove(((uint8_t*)&mapped)+offsetInBytes, data, deltaLengthInBytes);
             return deconstruct(mapped);
         }
 
-        uint32_t leftLength = 1 << (31 - __builtin_clz(lengthInBytes-1));
+        size_t level = lengthToLevel(lengthInBytes);
+        uint64_t mapped = construct(idx, level);
+
+        uint32_t leftLength = 1 << level;
         uint64_t mappedNew = 0;
 
         if(offsetInBytes < leftLength) {
@@ -1131,20 +1223,21 @@ private:
             if(shrinkTo == 2) {
                 return idx;
             } else {
-                return _hashSet.get(idx);
+                return construct(idx, 0);
             }
         }
 
-        uint32_t leftLength = 1 << (31 - __builtin_clz(length-1));
+        size_t level = lengthToLevel(length);
+        uint32_t leftLength = 1 << level;
 
         if(leftLength < shrinkTo) {
-            uint64_t mapped = _hashSet.get(idx);
+            uint64_t mapped = construct(idx, level);
             uint32_t rightIndex = mapped >> 32;
             mapped &= 0xFFFFFFFF00000000ULL;
             mapped |= ((uint64_t)shrinkRecursive(rightIndex, length - leftLength, shrinkTo - leftLength)) << 32;
             return deconstruct(mapped);
         } else if(leftLength > shrinkTo) {
-            uint64_t mapped = _hashSet.get(idx);
+            uint64_t mapped = construct(idx, level);
             // Recursively shrink the left index
             return shrinkRecursive(mapped, leftLength, shrinkTo);
         } else {
@@ -1164,7 +1257,7 @@ private:
         if(newLength == 2) {
 
             // This can only happen for [original][delta]
-            return deconstruct( ((uint64_t)idx) | (((uint64_t)(*(uint32_t*)data)) << 32) );
+            return deconstruct( ((uint64_t)idx) | (((uint64_t)(*(uint32_t*)data)) << 32), 0);
 
 //            // Options are:
 //            // [original[delta]
@@ -1201,7 +1294,8 @@ private:
 //            return deconstruct(mapped);
 //        }
 
-        uint32_t leftLength = 1 << (31 - __builtin_clz(newLength-1));
+        size_t level = lengthToLevel(newLength);
+        uint32_t leftLength = 1 << level;
         uint32_t zeroExtendedLength = length + offset;
         uint32_t rightOffset = zeroExtendedLength - leftLength;
 
@@ -1215,7 +1309,7 @@ private:
 
         // If the left part is part of what we already have
         } else if(leftLength < length) {
-            uint64_t mapped = _hashSet.get(idx);
+            uint64_t mapped = construct(idx, level);
             leftIndex = mapped & 0xFFFFFFFF;
             if(REPORT) printf("Detected unchanged part: %x(%u)\n", leftIndex, leftLength);
             rightIndex = extendRecursive(mapped >> 32, length - leftLength, offset, deltaLength, data);
@@ -1231,7 +1325,7 @@ private:
             rightIndex = deconstruct(data - (int32_t)rightOffset, newLength - (int32_t)leftLength);
         }
 
-        return deconstruct(((uint64_t)leftIndex) | (((uint64_t)rightIndex) << 32));
+        return deconstruct(((uint64_t)leftIndex) | (((uint64_t)rightIndex) << 32), level);
 /*
             // If the left part contains part of the original
             if(length > 0) {
@@ -1276,30 +1370,32 @@ private:
     uint32_t zeroExtend(uint32_t idx, uint32_t length, uint32_t extendTo) {
         if(REPORT) printf("Zero-extending %x(%u) to %u\n", idx, length << 2, extendTo << 2);
 
-        uint32_t leftLength = 1 << (31 - __builtin_clz(extendTo-1));
+        size_t level = lengthToLevel(extendTo);
+        uint32_t leftLength = 1 << level;
 
         // If the left part is part of what we already have
         if(extendTo == length) {
             return idx;
         } else if(leftLength == length) {
-            return deconstruct(idx);
+            return deconstruct(idx, level);
         } else if(leftLength < length) {
-            uint64_t mapped = _hashSet.get(idx);
+            uint64_t mapped = construct(idx, level);
             uint64_t newIndex = mapped & 0xFFFFFFFFULL;
             if(REPORT) printf("Detected unchanged part: %zx(%u)\n", newIndex, leftLength << 2);
             newIndex |= ((uint64_t)zeroExtend(mapped >> 32, length - leftLength, extendTo - leftLength)) << 32;
-            return deconstruct(newIndex);
+            return deconstruct(newIndex, level);
 
         // If the left part contains 0's
         } else {
-            return deconstruct(zeroExtend(idx, length, leftLength));
+            return deconstruct(zeroExtend(idx, length, leftLength), level);
         }
     }
 
     uint32_t insertZeroPrepended(uint32_t* data, uint32_t length, uint32_t offset) {
         if(REPORT) printf("Zero-prepending vector of length %u with %u zeroes\n", length << 2, offset << 2);
 
-        uint32_t leftLength = 1 << (31 - __builtin_clz(length + offset -1));
+        size_t level = lengthToLevel(length + offset);
+        uint32_t leftLength = 1 << level;
 
         // If the offset is 0, this is just a normal deconstruct
         if(offset == 0) {
@@ -1308,20 +1404,21 @@ private:
         // If the lengthLength is exactly the offset, the right side is
         // just a normal deconstruct and the left are only 0's
         } else if(leftLength == offset) {
-            return deconstruct(((uint64_t)deconstruct(data, length)) << 32);
+            return deconstruct(((uint64_t)deconstruct(data, length)) << 32, level);
 
         // If the right part contains zeroes, the left part is
         // only zeroes and the right part needs to be recursively handled
         } else if(leftLength < offset) {
-            return deconstruct(((uint64_t)insertZeroPrepended(data, length, offset - leftLength)) << 32);
+            return deconstruct(((uint64_t)insertZeroPrepended(data, length, offset - leftLength)) << 32, level);
 
         // If the left part contains part of the data, the right part
         // is normal data and the left part needs to be recursively handled
         } else {
             uint32_t diff = leftLength - offset;
-            return deconstruct( ((uint64_t)insertZeroPrepended(data, diff, offset))
-                              | (((uint64_t)deconstruct(data + diff, length - diff)) << 32)
-                              );
+            uint64_t v = ((uint64_t)insertZeroPrepended(data, diff, offset))
+                       | (((uint64_t)deconstruct(data + diff, length - diff)) << 32)
+                       ;
+            return deconstruct(v, level);
         }
     }
 
@@ -1352,12 +1449,13 @@ private:
                 // [ original ]
                 //          [ delta ]
                 //
-                uint32_t leftLength = 1 << (31 - __builtin_clz(newLength-1));
-                uint64_t mapped = _hashSet.get(idx);
+                size_t level = lengthToLevel(newLength);
+                uint32_t leftLength = 1 << level;
+                uint64_t mapped = construct(idx, level);
 
                 // If the delta affects the left part
                 if(offset < leftLength) {
-                    if(REPORT) printf("Right part is purely delta, leftLength=%u\n", leftLength);
+                    if(REPORT) printf("Right part is purely delta, leftLength=%uB\n", leftLength << 2);
                     uint32_t deltaLengthLeft = leftLength - offset;
                     uint32_t leftIndex;
                     if(length > leftLength) {
@@ -1366,16 +1464,16 @@ private:
                         leftIndex= deltaApplyMayExtend(idx, length, offset, deltaData, deltaLengthLeft);
                     }
                     uint32_t rightIndex = deconstruct(deltaData + deltaLengthLeft, deltaLength - deltaLengthLeft);
-                    return deconstruct(((uint64_t)leftIndex) | (((uint64_t)rightIndex) << 32));
+                    return deconstruct(((uint64_t)leftIndex) | (((uint64_t)rightIndex) << 32), level);
                 }
 
                 // If the left part stays unchanged
                 else {
-                    if(REPORT) printf("Left part is unchanged, leftLength=%u\n", leftLength);
+                    if(REPORT) printf("Left part is unchanged, leftLength=%uB\n", leftLength << 2);
                     uint32_t rightIndex = deltaApplyMayExtend(mapped >> 32, length - leftLength, offset - leftLength, deltaData, deltaLength);
                     mapped &= 0x00000000FFFFFFFFULL;
                     mapped |= ((uint64_t)rightIndex) << 32;
-                    return deconstruct(mapped);
+                    return deconstruct(mapped, level);
                 }
 
             }
@@ -1386,8 +1484,7 @@ private:
                 idx = extendRecursive(idx, length, offset - length, deltaLength, deltaData);
             }
 
-            // Add the length and return the new Index
-            idx |= ((uint64_t)(offset + deltaLength)) << 34;
+            // Return the new Index
             return idx;
         }
 
@@ -1430,7 +1527,7 @@ private:
 ////            return deconstruct(mapped);
 ////        }
 //
-//        uint32_t leftLength = 1 << (31 - __builtin_clz(newLength-1));
+//        uint32_t leftLength = 1 << lengthToLevel(newLength);
 //        uint64_t newIndex = idx;
 //        uint32_t zeroExtendedLength = length + offset;
 //        uint32_t rightOffset = zeroExtendedLength - leftLength;
@@ -1467,7 +1564,4 @@ private:
 //
 //    }
 
-// Fields
-private:
-    HS _hashSet;
 };

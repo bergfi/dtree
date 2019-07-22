@@ -24,42 +24,21 @@ if(COMPILER_SUPPORTS_MARCH_NATIVE)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mcx16")
 endif()
 
-#CHECK_CXX_COMPILER_FLAG("-march=native" COMPILER_SUPPORTS_MARCH_NATIVE)
-#if(COMPILER_SUPPORTS_MARCH_NATIVE)
-#    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native")
-#endif()
-
-add_executable(dtreetest
-    src/dtreetest/dtreetest.cpp
-)
 include_directories(
-    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/dtree/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/dtreetest/include"
     "${CMAKE_CURRENT_SOURCE_DIR}/treedbs/include"
 )
-set_property(TARGET dtreetest PROPERTY CXX_STANDARD 14)
-set_property(TARGET dtreetest PROPERTY CXX_STANDARD_REQUIRED ON)
-
-add_definitions(-Wall -Wextra -Wno-vla -Wno-implicit-fallthrough -Wno-unused-parameter)
-
-set(WITH_LIBFRUGI "" CACHE FILEPATH "Path to LTSmin install directory")
-if(WITH_LIBFRUGI)
-    if(EXISTS "${WITH_LIBFRUGI}/include/libfrugi/Settings.h")
-		include_directories(
-			"${WITH_LIBFRUGI}/include"
-		)
-		set(HAVE_LIBFRUGI 1)
-    else()
-        message(SEND_ERROR "${WITH_LIBFRUGI} does not contain include/libfrugi/Settings.h")
-    endif()
-else()
-#    message(SEND_ERROR "Please specify root source directory of LTSmin using -DWITH_LTSMIN=...")
-	set(HAVE_LIBFRUGI 0)
-endif()
 
 add_subdirectory("treedbs")
+add_subdirectory("dtree")
+add_subdirectory("dtreetest")
+
+add_dependencies(dtreetest dtree)
 
 message(STATUS "Host: ${HOSTNAME}")
 message(STATUS "Available: ${CMAKE_CONFIGURATION_TYPES}")
 message(STATUS "Building configuration: ${CMAKE_BUILD_TYPE}")
 message(STATUS "    C flags: ${CMAKE_C_FLAGS}")
 message(STATUS "  CXX flags: ${CMAKE_CXX_FLAGS}")
+

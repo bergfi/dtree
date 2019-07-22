@@ -328,14 +328,30 @@ public:
         size_t failedCAS;
     };
 
+    struct mapStats {
+        size_t bytesReserved;
+        size_t bytesUsed;
+
+        mapStats& operator+=(const mapStats& other) {
+            this->bytesReserved += other.bytesReserved;
+            this->bytesUsed += other.bytesUsed;
+            return *this;
+        }
+    };
+
+//    HashSet(): _scale(0), _buckets(0), _entriesMask(0), _map(nullptr) {
+//    }
+
     HashSet(size_t scale): _scale(scale) {
         _buckets = 1ULL << _scale;
         _entriesMask = _buckets - 1;
         _map = (decltype(_map))mmap(nullptr, _buckets * sizeof(uint64_t), PROT_READ|PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+        assert(_map && "failed to mmap data");
     }
 
     ~HashSet() {
         munmap(_map, _buckets * sizeof(uint64_t));
+        _map = nullptr;
     }
 
     uint32_t entry(uint64_t key) {
@@ -357,10 +373,13 @@ public:
         }
         std::atomic<uint64_t>* current = &_map[e];
 
-        while(true) {
+        size_t probeCount = 1;
+        while(probeCount < _buckets) {
             if(REPORT_HS) printf("e: %u\n", e);
             uint64_t k = current->load(std::memory_order_relaxed);
             if(k == 0ULL) {
+
+                // Make sure we do not use the 0th index
                 if(e == 0) goto findnext;
                 if constexpr(!INSERT) {
                     if(REPORT) printf("No such mapping %16zx -> ?\n", key);
@@ -392,6 +411,7 @@ public:
             searcher.next();
             if(TRACKING) ps.probeCount++;
             current = &_map[e];
+            probeCount++;
         }
 //        if(key > 0xffffffffull) {
 //            char* c = (char*)&key;
@@ -402,9 +422,8 @@ public:
 //            }
 //            printf("-> %8x\n", e);
 //        } else
-        if(REPORT_HS) printf("  inserted\n");
-            if(REPORT) printf("Mapped %16zx -> %8x\n", key, e);
-        return e;
+        if(REPORT_HS) printf("Hash map full\n");
+        return 0ULL;
     }
 
     uint64_t insert(uint64_t key) {
@@ -466,9 +485,27 @@ public:
         }
     }
 
+    mapStats const& getStats() {
+        std::atomic<uint64_t>* current = _map;
+        std::atomic<uint64_t>* end = _map + _buckets;
+
+        size_t bytesUsed = 0;
+        while(current < end) {
+            if(current->load(std::memory_order_relaxed)) {
+                ++bytesUsed;
+            }
+            ++current;
+        }
+
+        _mapStats.bytesReserved = _buckets * sizeof(std::atomic<uint64_t>);
+        _mapStats.bytesUsed = bytesUsed;
+        return _mapStats;
+    }
+
 public:
-    size_t _buckets;
     size_t _scale;
+    size_t _buckets;
     size_t _entriesMask;
     std::atomic<uint64_t>* _map;
+    mapStats _mapStats;
 };

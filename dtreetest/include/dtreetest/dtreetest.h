@@ -13,11 +13,11 @@ public:
 
     template<bool (*F)(TREE& tree, const char* vector, size_t offset, const char* deltaData)>
     void test() {
-        char original[] = "AAAABBBBCCCCDDDDEEEEFFFFGGGGHHHHIIIIJJJJKKKKLLLLMMMMNNNNOOOOPPPPQQQQRRRR";
+        char original[] = "AAAABBBBCCCCDDDDEEEEFFFFGGGGHHHHIIIIJJJJKKKKLLLLMMMMNNNNOOOOPPPPQQQQRRRRSSSS";
         char delta[] = "qqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz";
 
         for(size_t length = 0; length < sizeof(original)/4; ++length) {
-            printf("vector of length %u\n", length);
+            printf("vector of length %zu\n", length);
             for(size_t deltaLength = 0; deltaLength < sizeof(delta)/4; ++deltaLength) {
                 for(size_t offset = 0; offset < sizeof(original)/4; ++offset) {
                     char save1 = original[length*4];
@@ -34,54 +34,54 @@ public:
 
     void go() {
 
-//        printf("\n:: Testing getSparse()\n");
-//
-//        testGetSparse(_tree, "0123456789ABCDEF", 0, 2, 2, 2);
-//        testGetSparse(_tree, "aAaAbBbBcCcCdDdDeEeEfFfFgGgGhHhHiIiIjJjJkKkKlLlL", 0, 3, 3, 3);
-//        testGetSparse(_tree, "aAaAbBbBcCcCdDdDeEeEfFfFgGgGhHhHiIiIjJjJkKkKlLlL", 1, 3, 4, 3);
-//        testSparse2<testGetSparse>();
-//
-//        printf("\n:: Testing deltaSparse()\n");
-//
-//        testDeltaSparse(_tree, "0123456789ABCDEF", 0, 2, 2, 2);
-//        testDeltaSparse(_tree, "aAaAbBbBcCcCdDdDeEeEfFfFgGgGhHhHiIiIjJjJkKkKlLlL", 0, 3, 3, 3);
-//        testDeltaSparse(_tree, "aAaAbBbBcCcCdDdDeEeEfFfFgGgGhHhHiIiIjJjJkKkKlLlL", 1, 3, 4, 3);
-//        testSparse2<testDeltaSparse>();
-//
-//        printf("\n:: Testing deltaSparseStride()\n");
-//
-////        testDeltaSparseStride2(_tree, "0123456789ABCDEF", 0, 2, 2, 2);
-////        testDeltaSparseStride2(_tree, "aAaAbBbBcCcCdDdDeEeEfFfFgGgGhHhHiIiIjJjJkKkKlLlL", 0, 3, 3, 3);
-////        testDeltaSparseStride2(_tree, "aAaAbBbBcCcCdDdDeEeEfFfFgGgGhHhHiIiIjJjJkKkKlLlL", 1, 3, 4, 3);
-////        testSparse2<testDeltaSparseStride2>();
-//        testSparse<testDeltaSparseStride>();
-//
-//        printf("\n:: Testing extendAt()\n");
-//
-//        testExtend(_tree, "0123456789AB"    , 2, "zZzZ");
-//        testExtend(_tree, "0123456789ABCDEF", 0, "zZzZ");
-//        testExtend(_tree, "0123456789ABCDEF", 0, "zZzZxXxX89ABCDEF");
-//        testExtend(_tree, "0123456789ABCDEF", 24, "zZzZxXxX89ABCDEF");
-//        testExtend(_tree, "0123", 24, "zZzZxXxX89ABCDEF");
-//        testExtend(_tree, "0123", 24, "zZzZ");
-//        testExtend(_tree, "0123", 1, "zZzZxXxX89ABCDEF");
-//        testExtend(_tree, "0123456789ABCDEF", 128, "zZzZxXxX89ABCDEF");
-//        testExtend(_tree, "0123456789ABCDEF", 4, "");
-//        testExtend(_tree, "", 3, "ABCD");
-//        testExtend(_tree, "", 0, "ABCD");
-//        testExtend(_tree, "0123456789ABCDEF", 0, "");
-//        testExtend(_tree, "", 0, "");
-//        testExtend(_tree, "0123", 0, "zZzZxXxX89ABCDEF");
-//
-//        test<testExtend>();
+        printf("\n:: Testing getSparse()\n");
+
+        testGetSparse(_tree, "0123456789ABCDEF", 0, 2, 2, 2);
+        testGetSparse(_tree, "aAaAbBbBcCcCdDdDeEeEfFfFgGgGhHhHiIiIjJjJkKkKlLlL", 0, 3, 3, 3);
+        testGetSparse(_tree, "aAaAbBbBcCcCdDdDeEeEfFfFgGgGhHhHiIiIjJjJkKkKlLlL", 1, 3, 4, 3);
+        testSparse2<testGetSparse>();
+
+        printf("\n:: Testing deltaSparse()\n");
+
+        testDeltaSparse(_tree, "0123456789ABCDEF", 0, 2, 2, 2);
+        testDeltaSparse(_tree, "aAaAbBbBcCcCdDdDeEeEfFfFgGgGhHhHiIiIjJjJkKkKlLlL", 0, 3, 3, 3);
+        testDeltaSparse(_tree, "aAaAbBbBcCcCdDdDeEeEfFfFgGgGhHhHiIiIjJjJkKkKlLlL", 1, 3, 4, 3);
+        testSparse2<testDeltaSparse>();
+
+        printf("\n:: Testing deltaSparseStride()\n");
+
+//        testDeltaSparseStride2(_tree, "0123456789ABCDEF", 0, 2, 2, 2);
+//        testDeltaSparseStride2(_tree, "aAaAbBbBcCcCdDdDeEeEfFfFgGgGhHhHiIiIjJjJkKkKlLlL", 0, 3, 3, 3);
+//        testDeltaSparseStride2(_tree, "aAaAbBbBcCcCdDdDeEeEfFfFgGgGhHhHiIiIjJjJkKkKlLlL", 1, 3, 4, 3);
+//        testSparse2<testDeltaSparseStride2>();
+        testSparse<testDeltaSparseStride>();
+
+        printf("\n:: Testing extendAt()\n");
+
+        testExtend(_tree, "0123456789AB"    , 2, "zZzZ");
+        testExtend(_tree, "0123456789ABCDEF", 0, "zZzZ");
+        testExtend(_tree, "0123456789ABCDEF", 0, "zZzZxXxX89ABCDEF");
+        testExtend(_tree, "0123456789ABCDEF", 24, "zZzZxXxX89ABCDEF");
+        testExtend(_tree, "0123", 24, "zZzZxXxX89ABCDEF");
+        testExtend(_tree, "0123", 24, "zZzZ");
+        testExtend(_tree, "0123", 1, "zZzZxXxX89ABCDEF");
+        testExtend(_tree, "0123456789ABCDEF", 128, "zZzZxXxX89ABCDEF");
+        testExtend(_tree, "0123456789ABCDEF", 4, "");
+        testExtend(_tree, "", 3, "ABCD");
+        testExtend(_tree, "", 0, "ABCD");
+        testExtend(_tree, "0123456789ABCDEF", 0, "");
+        testExtend(_tree, "", 0, "");
+        testExtend(_tree, "0123", 0, "zZzZxXxX89ABCDEF");
+
+        test<testExtend>();
 
         printf("\n:: Testing deltaMayExtend()\n");
 
         testDeltaMayExtend(_tree, "AAAABBBBCCCC"    , 2, "aaaa");
-        testDeltaMayExtend(_tree, "0123456789ABCDEF", 0, "zZzZ");
-        testDeltaMayExtend(_tree, "0123456789ABCDEF", 0, "zZzZxXxX89ABCDEF");
-        testDeltaMayExtend(_tree, "0123456789ABCDEF", 24, "zZzZxXxX89ABCDEF");
-        testDeltaMayExtend(_tree, "0123", 24, "zZzZxXxX89ABCDEF");
+        testDeltaMayExtend(_tree, "AAAABBBBCCCCDDDD", 0, "aaaa");
+        testDeltaMayExtend(_tree, "AAAABBBBCCCCDDDD", 0, "aaaabbbbccccdddd");
+        testDeltaMayExtend(_tree, "AAAABBBBCCCCDDDD", 24, "aaaabbbbccccdddd");
+        testDeltaMayExtend(_tree, "AAAA", 24, "aaaabbbbccccdddd");
         testDeltaMayExtend(_tree, "0123", 24, "zZzZ");
         testDeltaMayExtend(_tree, "0123", 1, "zZzZxXxX89ABCDEF");
         testDeltaMayExtend(_tree, "0123456789ABCDEF", 128, "zZzZxXxX89ABCDEF");
@@ -141,7 +141,7 @@ public:
     }
 
     static bool testDeltaMayExtend(TREE& tree, const char* vector, size_t offset, const char* deltaData) {
-        return testDeltaMayExtend(tree, (uint32_t*)vector, strlen(vector)>>2, offset, strlen(deltaData)>>2, (uint32_t*)deltaData);
+        return testDeltaMayExtend(tree, (uint32_t*)vector, strlen(vector)>>2, offset >> 2, strlen(deltaData)>>2, (uint32_t*)deltaData);
     }
 
     static bool testDeltaMayExtend(TREE& tree, uint32_t* vector, size_t length, size_t offset, uint32_t deltaLength, uint32_t* deltaData) {
@@ -151,6 +151,7 @@ public:
         size_t expectedLength = deltaLength == 0 ? length : std::max(length, offset + deltaLength);
 
         typename TREE::Index idx = tree.insert(vector, length);
+//        printf("  ---\n");
         typename TREE::Index idx2 = tree.deltaMayExtend(idx, offset, deltaData, deltaLength);
 
         uint32_t bufferCorrect[length + offset + deltaLength + 1];
@@ -358,7 +359,7 @@ public:
         char original[] = "AAAABBBBCCCCDDDDEEEEFFFFGGGGHHHHIIIIJJJJKKKKLLLLMMMMNNNNOOOOPPPPQQQQRRRRSSSSTTTTUUUU";
 
         for(size_t length = 2; length < sizeof(original)/4; ++length) {
-            printf("vector of length %u\n", length);
+            printf("vector of length %zu\n", length);
             for(size_t offset = 0; offset < length - 1; ++offset) {
                 for(size_t offsetEnd = offset + 1; offsetEnd < length; ++offsetEnd) {
                     for(size_t offset2 = offsetEnd; offset2 < length; ++offset2) {
@@ -380,7 +381,7 @@ public:
 
         // This calls F for every possible multi-delta configuration
         for(size_t length = 1; length < sizeof(original)/4; ++length) {
-            printf("vector of length %u\n", length);
+            printf("vector of length %zu\n", length);
             for(size_t offsets = 1; offsets <= length; ++offsets) {
                 for(size_t currentDelta = offsets; currentDelta--;) {
                     offsetData[currentDelta][0] = currentDelta;
