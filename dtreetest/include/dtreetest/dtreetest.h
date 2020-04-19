@@ -8,7 +8,8 @@ template<typename TREE>
 class dtreeTest {
 public:
 
-    dtreeTest(size_t scale): _tree(scale) {
+    dtreeTest(size_t scale): _tree() {
+        _tree.setScale(scale);
     }
 
     template<bool (*F)(TREE& tree, const char* vector, size_t offset, const char* deltaData)>
@@ -117,8 +118,8 @@ public:
 
 //        printf("  > testExtend(%s, %zu, %s)\n", (char*)vector, offset, (char*)deltaData);
 
-        typename TREE::Index idx = tree.insert(vector, length);
-        typename TREE::Index idx2 = tree.extendAt(idx, offset, deltaLength, deltaData);
+        typename TREE::IndexInserted idx = tree.insert(vector, length, true);
+        typename TREE::IndexInserted idx2 = tree.extendAt(idx.getState(), offset, deltaLength, deltaData, true);
 
         uint32_t bufferCorrect[length + offset + deltaLength + 1];
         memmove((char*)bufferCorrect, (void*)vector, length*sizeof(uint32_t));
@@ -128,14 +129,14 @@ public:
 
         uint32_t bufferResult[length + offset + deltaLength + 1];
         bufferResult[length + offset + deltaLength] = 0;
-        tree.get(idx2, bufferResult);
+        tree.get(idx2.getState(), bufferResult, true);
         auto r = memcmp(bufferCorrect, bufferResult, (length + offset + deltaLength + 1)*sizeof(uint32_t));
         if(r==0) {
 //            printf("OK!\n");
         } else {
             printf("\033[31mWRONG!\033[0m\n");
-            tree.printBuffer("Expected", (char*)bufferCorrect, (length + offset + deltaLength)*sizeof(uint32_t), 0);
-            tree.printBuffer("Obtained", (char*)bufferResult, (length + offset + deltaLength)*sizeof(uint32_t), 0);
+            tree.printBuffer("Expected", bufferCorrect, (length + offset + deltaLength)*sizeof(uint32_t), 0);
+            tree.printBuffer("Obtained", bufferResult, (length + offset + deltaLength)*sizeof(uint32_t), 0);
         }
         return false;
     }
@@ -150,9 +151,8 @@ public:
 
         size_t expectedLength = deltaLength == 0 ? length : std::max(length, offset + deltaLength);
 
-        typename TREE::Index idx = tree.insert(vector, length);
-//        printf("  ---\n");
-        typename TREE::Index idx2 = tree.deltaMayExtend(idx, offset, deltaData, deltaLength);
+        typename TREE::IndexInserted idx = tree.insert(vector, length, true);
+        typename TREE::IndexInserted idx2 = tree.deltaMayExtend(idx.getState(), offset, deltaData, deltaLength, true);
 
         uint32_t bufferCorrect[length + offset + deltaLength + 1];
         memset((char*)(bufferCorrect), 0, (expectedLength+1)*sizeof(uint32_t));
@@ -163,14 +163,14 @@ public:
 
         uint32_t bufferResult[length + offset + deltaLength + 1];
         bufferResult[expectedLength] = 0;
-        tree.get(idx2, bufferResult);
+        tree.get(idx2.getState(), bufferResult, true);
         auto r = memcmp(bufferCorrect, bufferResult, (expectedLength+1)*sizeof(uint32_t));
         if(r==0) {
 //            printf("OK!\n");
         } else {
             printf("\033[31mWRONG!\033[0m\n");
-            tree.printBuffer("Expected", (char*)bufferCorrect, (expectedLength)*sizeof(uint32_t), 0);
-            tree.printBuffer("Obtained", (char*)bufferResult, (expectedLength)*sizeof(uint32_t), 0);
+            tree.printBuffer("Expected", bufferCorrect, (expectedLength)*sizeof(uint32_t), 0);
+            tree.printBuffer("Obtained", bufferResult, (expectedLength)*sizeof(uint32_t), 0);
         }
         return false;
     }
@@ -195,8 +195,8 @@ public:
         uint32_t bufferResult[expectedLength + 1];
         bufferResult[expectedLength] = 0;
 
-        typename TREE::Index idx = tree.insert(vector, length);
-        tree.getSparse(idx, bufferResult, 2, offsets);
+        typename TREE::IndexInserted idx = tree.insert(vector, length, true);
+        tree.getSparse(idx.getState(), bufferResult, 2, offsets, true);
 
         uint32_t bufferCorrect[expectedLength + 1];
         if(deltaLength > 0) {
@@ -212,8 +212,8 @@ public:
 //            printf("OK!\n");
         } else {
             printf("\033[31mWRONG!\033[0m\n");
-            tree.printBuffer("Expected", (char*)bufferCorrect, (expectedLength)*sizeof(uint32_t), 0);
-            tree.printBuffer("Obtained", (char*)bufferResult, (expectedLength)*sizeof(uint32_t), 0);
+            tree.printBuffer("Expected", bufferCorrect, (expectedLength)*sizeof(uint32_t), 0);
+            tree.printBuffer("Obtained", bufferResult, (expectedLength)*sizeof(uint32_t), 0);
         }
         return false;
     }
@@ -237,8 +237,8 @@ public:
         offsets[0] = (offset << 8) | deltaLength;
         offsets[1] = (offset2 << 8) | deltaLength2;
 
-        typename TREE::Index idx = tree.insert(vector, length);
-        typename TREE::Index idx2 = tree.deltaSparse(idx, (uint32_t*)delta, 2, offsets);
+        typename TREE::IndexInserted idx = tree.insert(vector, length, true);
+        typename TREE::IndexInserted idx2 = tree.deltaSparse(idx.getState(), (uint32_t*)delta, 2, offsets, true);
 
         uint32_t bufferCorrect[expectedLength + 1];
         memmove((char*)bufferCorrect, (void*)vector, length*sizeof(uint32_t));
@@ -251,7 +251,7 @@ public:
         memset((char*)(bufferCorrect+expectedLength), 0, sizeof(uint32_t));
 
         uint32_t bufferResult[expectedLength + 1];
-        tree.get(idx2, bufferResult);
+        tree.get(idx2.getState(), bufferResult, true);
         bufferResult[expectedLength] = 0;
 
         auto r = memcmp(bufferCorrect, bufferResult, (expectedLength+1)*sizeof(uint32_t));
@@ -259,8 +259,8 @@ public:
 //            printf("OK!\n");
         } else {
             printf("\033[31mWRONG!\033[0m\n");
-            tree.printBuffer("Expected", (char*)bufferCorrect, (expectedLength)*sizeof(uint32_t), 0);
-            tree.printBuffer("Obtained", (char*)bufferResult, (expectedLength)*sizeof(uint32_t), 0);
+            tree.printBuffer("Expected", bufferCorrect, (expectedLength)*sizeof(uint32_t), 0);
+            tree.printBuffer("Obtained", bufferResult, (expectedLength)*sizeof(uint32_t), 0);
         }
         return false;
     }
@@ -308,8 +308,8 @@ public:
 //            printf("OK!\n");
         } else {
             printf("\033[31mWRONG!\033[0m\n");
-            tree.printBuffer("Expected", (char*)bufferCorrect, (expectedLength)*sizeof(uint32_t), 0);
-            tree.printBuffer("Obtained", (char*)bufferResult, (expectedLength)*sizeof(uint32_t), 0);
+            tree.printBuffer("Expected", bufferCorrect, (expectedLength)*sizeof(uint32_t), 0);
+            tree.printBuffer("Obtained", bufferResult, (expectedLength)*sizeof(uint32_t), 0);
         }
         return false;
     }
@@ -322,8 +322,8 @@ public:
 
         size_t expectedLength = length;
 
-        typename TREE::Index idx = tree.insert(vector, length);
-        typename TREE::Index idx2 = tree.deltaSparseStride(idx, (uint32_t*)delta, offsets, offsetData, stride);
+        typename TREE::IndexInserted idx = tree.insert(vector, length, true);
+        typename TREE::IndexInserted idx2 = tree.deltaSparseStride(idx.getState(), (uint32_t*)delta, offsets, offsetData, stride, true);
 
         uint32_t bufferCorrect[expectedLength + 1];
         memmove((char*)bufferCorrect, (void*)vector, length*sizeof(uint32_t));
@@ -340,7 +340,7 @@ public:
         memset((char*)(bufferCorrect+expectedLength), 0, sizeof(uint32_t));
 
         uint32_t bufferResult[expectedLength + 1];
-        tree.get(idx2, bufferResult);
+        tree.get(idx2.getState(), bufferResult, true);
         bufferResult[expectedLength] = 0;
 
         auto r = memcmp(bufferCorrect, bufferResult, (expectedLength+1)*sizeof(uint32_t));
@@ -348,8 +348,8 @@ public:
 //            printf("OK!\n");
         } else {
             printf("\033[31mWRONG!\033[0m\n");
-            tree.printBuffer("Expected", (char*)bufferCorrect, (expectedLength)*sizeof(uint32_t), 0);
-            tree.printBuffer("Obtained", (char*)bufferResult, (expectedLength)*sizeof(uint32_t), 0);
+            tree.printBuffer("Expected", bufferCorrect, (expectedLength)*sizeof(uint32_t), 0);
+            tree.printBuffer("Obtained", bufferResult, (expectedLength)*sizeof(uint32_t), 0);
         }
         return false;
     }

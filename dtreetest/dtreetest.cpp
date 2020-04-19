@@ -12,9 +12,11 @@ void runTest(std::string const& name) {
     Settings& settings = Settings::global();
 
     if(name == "dtree.s") {
-        dtreeTest<dtree<SingleLevelhashSet<HashSet<RehasherExit, Linear> > > > (settings["buckets_scale"].asUnsignedValue()).go();
+//        dtreeTest<dtree<SingleLevelhashSet<HashSet<RehasherExit, Linear> > > > (settings["buckets_scale"].asUnsignedValue()).go();
     } else if(name == "dtree.m") {
-        dtreeTest<dtree<MultiLevelhashSet<HashSet<RehasherExit, Linear> > > > (settings["buckets_scale"].asUnsignedValue()).go();
+//        dtreeTest<dtree<MultiLevelhashSet<HashSet<RehasherExit, Linear> > > > (settings["buckets_scale"].asUnsignedValue()).go();
+    } else if(name == "dtree.sr") {
+        dtreeTest<dtree<SeparateRootSingleHashSet<HashSet128<RehasherExit, Linear>, HashSet<RehasherExit, Linear> > > > (settings["buckets_scale"].asUnsignedValue()).go();
     } else {
         printf("No compression data structure selected\n");
     }
@@ -68,6 +70,8 @@ int main(int argc, char** argv) {
                 break;
             case '-':
                 settings.insertKeyValue(optarg);
+            default:
+                break;
         }
     }
 

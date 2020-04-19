@@ -11,12 +11,24 @@
 #include "dbs-ll.h"
 
 #include <treedbs/treedbs-ll.h>
+#include <assert.h>
 
 static const int        TABLE_SIZE = 26;
 static const uint64_t   EMPTY = 0UL;
 static const uint64_t   EMPTY_1 = -1UL;
 static const size_t     CACHE_LINE_64 = (1 << CACHE_LINE) / sizeof (uint64_t);
 static const size_t     CL_MASK = -((1 << CACHE_LINE) / sizeof (uint64_t));
+
+#define HREassert(e,...) \
+    if (EXPECT_FALSE(!(e))) {\
+        char buf[4096];\
+        if (#__VA_ARGS__[0])\
+            snprintf(buf, 4096, ": " __VA_ARGS__);\
+        else\
+            buf[0] = '\0';\
+        fprintf(stderr, "assertion \"%s\" failed%s", #e, buf);\
+    }
+
 
 typedef struct node_table_s {
     uint64_t           *table;
@@ -46,7 +58,7 @@ struct treedbs_ll_s {
 };
 
 typedef struct loc_s {
-    int                *storage;
+    uint32_t           *storage;
 //    stats_t             stat;
     size_t             *node_count;
 } loc_t;
@@ -222,9 +234,9 @@ lookup (node_table_t *nodes,
     mem = hash = mix64 (data);
     HREassert (data != EMPTY_1, "Value (%zu) out of table range.\n"
             "Avoid -1 value or modify EMPTY_1 reserved value to unused value and recompile LTSmin.", (size_t) data);
-            // (re-wire data == EMPTY to data := EMPTY_1 after the next loc)
+//            // (re-wire data == EMPTY to data := EMPTY_1 after the next loc)
     data += 1; // avoid EMPTY
-    // data = data == EMPTY ? EMPTY_1 : data;
+//     data = data == EMPTY ? EMPTY_1 : data;
     for (size_t probes = 0; probes < nodes->thres; probes++) {
         size_t              ref = hash & nodes->mask;
         size_t              line_end = (ref & CL_MASK) + CACHE_LINE_64;
@@ -311,6 +323,83 @@ TreeDBSLLfop (const treedbs_ll_t dbs, const int *vector, bool insert)
 }
 
 int
+TreeDBSLLfopZeroExtend_ref (const treedbs_ll_t dbs, const int *vector, size_t length, bool isRoot, bool insert, tree_ref_t* ref)
+{
+    loc_t              *loc = get_local (dbs);
+    size_t              n = dbs->nNodes;
+    int                 seen = 0;
+    uint64_t            res = 0;
+    uint32_t            *next = loc->storage;
+    memcpy (next + n, vector, length * sizeof(int));
+    memset (next + n + length, 0, (n - length) * sizeof(int));
+
+//    fprintf(stderr, "Inserting with size %u\n", length);
+//    for(int i=0; i < length; ++i) {
+//        fprintf(stderr, " %x", vector[i]);
+//    }
+
+    // next: . . . . . . . . a b c d e f g h
+
+    // a b c d e f g h
+    //  4   3   2   1
+    //    6       5
+    //        7
+
+    for (size_t i = n - 1; seen >= 0 && i > 1; i--) {
+
+        // next: . . . . . . . .  a b c d e f g h
+        //                                    [ ] i64(next, i)
+        //                     ^ next[i]
+
+        seen = lookup (&dbs->data, i64(next, i), i-1, &res, loc, insert);
+        if (!insert && seen == DB_NOT_FOUND) return DB_NOT_FOUND;
+        next[i] = res;
+    }
+
+    // next: . . 6 5 4 3 2 1 a b c d e f g h
+
+    if(!isRoot) {
+        seen = lookup (&dbs->data, i64(next, 1), 0, &res, loc, insert);
+        if (!insert && seen == DB_NOT_FOUND) return DB_NOT_FOUND;
+        *((uint64_t*)next) = res;
+        //TODO: there's code here that breaks strict aliasing, which can lead to weird stuff. The same applies to
+        //      Alfons' original code
+    } else {
+        if(seen >= 0) {
+            if(dbs->slim) {
+                seen = clt_lookup(dbs, next, insert);
+                if(seen < 0) return seen;
+                loc->node_count[0] += 1 - seen;
+            } else {
+                seen = lookup(&dbs->root, i64(next, 1), 0, (uint64_t*) next, loc, insert);
+                // next: [1] 6 5 4 3 2 1 a b c d e f g h
+                //         ^
+                //         in root DB
+                if(!insert && seen == DB_NOT_FOUND) return DB_NOT_FOUND;
+                //((uint64_t*)next)[0] = -1;
+            }
+        }
+    }
+
+    assert((*((uint64_t*)next) & 0xFFFFFF0000000000ULL) == 0);
+    *((uint64_t*)next) |= length << 40;
+    *ref = TreeDBSLLindex(dbs, next);
+    if(*ref == 0xFFFFFFFFFFFFFFFFULL) {
+        printf("next = %p\n", next);
+        printf("*ref = %zx\n", *ref);
+        printf("res = %zx\n", res);
+        printf("next[0] = %x\n", next[0]);
+        printf("next[1] = %x\n", next[1]);
+        printf("isRoot= %u\n", isRoot);
+        printf("dbs->indexing= %u\n", dbs->indexing);
+        fflush(stdout);
+        abort();
+    }
+//    fprintf(stderr, ", seen: %u -> %zx (%zx)\n", seen, *ref, *((uint64_t*)next));
+    return seen;
+}
+
+int
 TreeDBSLLfop_incr (const treedbs_ll_t dbs, const int *v, tree_t prev,
                    tree_t next, bool insert)
 {
@@ -343,6 +432,53 @@ TreeDBSLLfop_incr (const treedbs_ll_t dbs, const int *v, tree_t prev,
             //((uint64_t*)next)[0] = -1;
         }
     }
+    return seen;
+}
+
+int
+TreeDBSLLfop_incr_ref (const treedbs_ll_t dbs, tree_t prev,
+                   tree_t next, bool isRoot, bool insert, tree_ref_t* ref)
+{
+    loc_t              *loc = get_local (dbs);
+    size_t              n = dbs->nNodes;
+    uint64_t            res = 0;
+    int                 seen = 1;
+    assert(prev);
+
+    memcpy (next, prev, sizeof (int[n]));
+
+    for (size_t i = n - 1; seen >= 0 && i > 1; i--) {
+        if ( !cmp_i64(prev, next, i) ) {
+            seen = lookup (&dbs->data, i64(next, i), i-1, &res, loc, insert);
+            if (!insert && seen == DB_NOT_FOUND) return DB_NOT_FOUND;
+            next[i] = res;
+        }
+    }
+    if(!isRoot) {
+        seen = lookup (&dbs->data, i64(next, 1), 0, (uint64_t*) &res, loc, insert);
+        if (!insert && seen == DB_NOT_FOUND) return DB_NOT_FOUND;
+        *((uint64_t*)next) = res;
+        //TODO: there's code here that breaks strict aliasing, which can lead to weird stuff. The same applies to
+        //      Alfons' original code
+    } else {
+        if(seen >= 0 && !cmp_i64(prev, next, 1)) {
+            if(dbs->slim) {
+                seen = clt_lookup(dbs, next, insert);
+                if(seen < 0) return seen;
+                loc->node_count[0] += 1 - seen;
+            } else {
+                seen = lookup(&dbs->root, i64(next, 1), 0, (uint64_t*) &res, loc, insert);
+                if(!insert && seen == DB_NOT_FOUND) return DB_NOT_FOUND;
+                //((uint64_t*)next)[0] = -1;
+                *((uint64_t*)next) = res;
+                //TODO: there's code here that breaks strict aliasing, which can lead to weird stuff. The same applies to
+                //      Alfons' original code
+            }
+        }
+    }
+    assert((*((uint64_t*)next) & 0xFFFFFF0000000000ULL) == 0);
+    *ref = TreeDBSLLindex(dbs, next);
+    assert(*ref != 0xFFFFFFFFFFFFFFFFULL);
     return seen;
 }
 
@@ -394,6 +530,39 @@ TreeDBSLLget (const treedbs_ll_t dbs, const tree_ref_t ref, int *d)
     }
     for (size_t i = 2; i < dbs->nNodes; i++)
         dst64[i] = (dbs->data.table[dst[i]] - 1) & dbs->data.sat_nmask; // for "- 1", see lookup() --> avoid EMPTY
+    return (tree_t)dst;
+}
+
+tree_t
+TreeDBSLLget_isroot (const treedbs_ll_t dbs, tree_ref_t ref, int *d, bool isRoot)
+{
+    uint32_t           *dst     = (uint32_t*)d;
+    int64_t            *dst64   = (int64_t *)dst;
+    size_t length = ref >> 40;
+    ref &= 0xFFFFFFFFFFULL;
+//    fprintf(stderr, "TreeDBSLLget_isroot(%zx, %u, %u)", ref, length, isRoot);
+    if(!isRoot) {
+        dst64[0] = ref;
+        dst64[1] = (dbs->data.table[ref] - 1) & dbs->data.sat_nmask;
+    } else {
+        if(!dbs->indexing && isRoot) { // skip the root leaf for cleary and for normal tree!
+            dst64[0] = -1;
+            dst64[1] = ref;
+        } else {
+            dst64[0] = ref;
+            dst64[1] = (dbs->root.table[ref] - 1) & dbs->root.sat_nmask;
+        }
+    }
+    for (size_t i = 2; i < dbs->nNodes; i++) {
+        dst64[i] = (dbs->data.table[dst[i]] - 1) & dbs->data.sat_nmask; // for "- 1", see lookup() --> avoid EMPTY
+    }
+//    fprintf(stderr, "Get %u returns %u:", ref & 0xFFFFFFFFFFULL, length);
+//    for(int i=0; i < length; ++i) {
+//        fprintf(stderr, " %x", dst[dbs->nNodes + i]);
+//    }
+//    fprintf(stderr, "\n");
+    assert((*dst64 & 0xFFFFFF0000000000ULL) == 0);
+    *dst64 |= length << 40;
     return (tree_t)dst;
 }
 
@@ -522,6 +691,24 @@ TreeDBSLLfree (treedbs_ll_t dbs)
     RTfree (dbs);
 }
 
+static void stats_nodes(node_table_t* nodes, size_t* bytesUsed, size_t* bytesReserved) {
+    uint64_t* where = nodes->table;
+    uint64_t* end = nodes->table + nodes->size;
+    while(where < end) {
+        if(*where != EMPTY) {
+            *bytesUsed += sizeof(uint64_t);
+        }
+        where++;
+    }
+    *bytesReserved += nodes->size * sizeof(uint64_t);
+}
+
+void TreeDBSLLstats2(treedbs_ll_t dbs, size_t* bytesUsed, size_t* bytesReserved) {
+    *bytesUsed = 0;
+    *bytesReserved = 0;
+    stats_nodes(&dbs->root, bytesUsed, bytesReserved);
+    stats_nodes(&dbs->data, bytesUsed, bytesReserved);
+}
 //stats_t *
 //TreeDBSLLstats (treedbs_ll_t dbs)
 //{

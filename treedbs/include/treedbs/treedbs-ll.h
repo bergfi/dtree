@@ -4,7 +4,9 @@
 
 #include <stdbool.h>
 
+#ifndef DM_H
 typedef void matrix_t;
+#endif
 
 /**
  * \file treedbs-ll.h
@@ -69,6 +71,7 @@ Abstract type tree database.
 typedef struct treedbs_ll_s *treedbs_ll_t;
 
 typedef size_t tree_ref_t;
+typedef size_t tree_ref_with_length_t;
 
 typedef int *tree_t;
 
@@ -111,8 +114,12 @@ extern int          TreeDBSLLtry_set_sat_bits (const treedbs_ll_t dbs,
                                                uint64_t exp, uint64_t new_val);
 
 extern int          TreeDBSLLfop (const treedbs_ll_t dbs, const int *v, bool insert);
+extern int          TreeDBSLLfopZeroExtend_ref (const treedbs_ll_t dbs, const int *v, size_t length, bool isRoot, bool insert, tree_ref_t* ref);
 extern int          TreeDBSLLfop_incr (const treedbs_ll_t dbs, const int *v,
                                           tree_t prev, tree_t next, bool insert);
+extern int          TreeDBSLLfop_incr_ref (const treedbs_ll_t dbs, tree_t prev, tree_t next, bool isRoot, bool insert, tree_ref_t* ref);
+
+tree_t TreeDBSLLget_isroot (const treedbs_ll_t dbs, const tree_ref_t ref, int *d, bool isRoot);
 
 /**
 \brief Find a vector with respect to a database and insert it if it cannot be
@@ -196,5 +203,6 @@ extern void         TreeDBSLLcache (treedbs_ll_t dbs, size_t size);
 \param dbs The dbs
 */
 //extern stats_t     *TreeDBSLLstats (treedbs_ll_t dbs);
+extern void TreeDBSLLstats2(treedbs_ll_t dbs, size_t* bytesUsed, size_t* bytesReserved);
 
 #endif

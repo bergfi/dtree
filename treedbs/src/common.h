@@ -2,6 +2,9 @@
 #include <pthread.h>
 
 #include "murmurhash.h"
+#include <mc-lib/atomics.h>
+#include <hre/user.h>
+#include <util-lib/util.h>
 
 typedef size_t hre_key_t;
 
@@ -22,9 +25,16 @@ typedef size_t hre_key_t;
 void* HREgetLocal(hre_key_t key);
 void HREsetLocal(hre_key_t key, void* package);
 void HREcreateLocal(hre_key_t *key, void (*destructor)(void *));
+void* RTmalloc(size_t size);
 void* RTmallocZero(size_t size);
 void* RTalign(size_t align, size_t size);
 void RTfree(void* ptr);
+void* RTalignZero(size_t align, size_t size);
+void HREabort(int code);
+void* HREalign(hre_region_t region,size_t align,size_t size);
+
+int log_active(log_t log);
+void log_message(log_t log,const char*file,int line,int errnum,const char *fmt,...);
 
 /**
 \brief These constructs prevent the compiler from optimizing (reordering) reads
@@ -34,3 +44,6 @@ void RTfree(void* ptr);
 */
 #define atomic_read(v)      (*(volatile typeof(*v) *)(v))
 #define atomic_write(v,a)   (*(volatile typeof(*v) *)(v) = (a))
+
+int mix (int a, int b, int c);
+uint64_t mix64 (uint64_t key);
