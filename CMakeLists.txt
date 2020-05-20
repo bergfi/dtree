@@ -30,9 +30,21 @@ include_directories(
     "${CMAKE_CURRENT_SOURCE_DIR}/treedbs/include"
 )
 
-add_subdirectory("treedbs")
+set(WITH_LIBFRUGI "" CACHE FILEPATH "Path to libfrugi library install directory")
+if(WITH_LIBFRUGI)
+    if(EXISTS "${WITH_LIBFRUGI}/include/libfrugi/Settings.h")
+        add_subdirectory("${WITH_LIBFRUGI}" "external/libfrugi")
+        set(HAVE_LIBFRUGI 1)
+    else()
+        message(SEND_ERROR "${WITH_LIBFRUGI} does not contain include/libfrugi/Settings.h")
+    endif()
+else()
+    set(HAVE_LIBFRUGI 0)
+endif()
+
+add_subdirectory("treedbs" EXCLUDE_FROM_ALL)
 add_subdirectory("dtree")
-add_subdirectory("dtreetest")
+add_subdirectory("dtreetest" EXCLUDE_FROM_ALL)
 
 add_dependencies(dtreetest dtree)
 
