@@ -654,7 +654,60 @@ public:
     using Index = INDEX;
     using IndexInserted = INDEXINSERTED;
 
-    using SparseOffset = uint32_t;
+    struct SparseOffset {
+
+    public:
+        __attribute__((always_inline))
+        constexpr SparseOffset(uint32_t const& offset, uint32_t const& length): _data((offset << 8) | length) {}
+
+        __attribute__((always_inline))
+        constexpr SparseOffset(uint32_t const& data): _data(data) {}
+
+        __attribute__((always_inline))
+        constexpr SparseOffset(): _data(0) {}
+    public:
+
+        __attribute__((always_inline))
+        uint32_t getOffset() const {
+            return _data >> 8;
+        }
+
+        __attribute__((always_inline))
+        uint32_t getLength() const {
+            return _data & 0xFF;
+        }
+
+        __attribute__((always_inline))
+        uint32_t getOffsetPart() const {
+            return _data & 0xFF000000;
+        }
+
+        __attribute__((always_inline))
+        bool operator<(SparseOffset const& other) {
+            return _data < other._data;
+        }
+
+        __attribute__((always_inline))
+        uint32_t getData() const {
+            return _data;
+        }
+
+        uint32_t _data;
+    };
+
+    struct Projection {
+    public:
+        constexpr Projection(SparseOffset* const& offsets): _offsets(offsets) {}
+        template<typename T>
+        constexpr Projection(T* const& offsets): _offsets((SparseOffset*)offsets) {}
+    public:
+
+        SparseOffset* const& getOffsets() const {
+            return _offsets;
+        }
+
+        SparseOffset* _offsets;
+    };
 
     struct DTreeNode {
     public:
@@ -875,7 +928,7 @@ public:
     bool getPartial(Index idx, uint32_t offset, uint32_t length, uint32_t* buffer, bool isRoot) {
         constructPartial(idx.getID(), idx.getLength(), offset, length, buffer, isRoot);
         if(REPORT) printBuffer("Constructed partially", buffer, length, idx.getID());
-        return false;
+        return true;
     }
 
 //    bool getSparseUnits(Index idx, uint32_t* buffer, uint32_t offsets, uint32_t* offset, bool isRoot) {
@@ -886,26 +939,34 @@ public:
 //        return false;
 //    }
 
-    bool getSparse(Index idx, uint32_t* buffer, uint32_t offsets, SparseOffset* offset, bool isRoot) {
-        constructSparse(idx.getID(), 0, 0, buffer, offsets, offset, isRoot);
+    bool getSparse(Index idx, uint32_t* buffer, uint32_t offsets, Projection projection, bool isRoot) {
+
+        constructSparse(idx.getID(), idx.getLength(), 0, buffer, offsets, projection, isRoot);
         if(REPORT) {
             size_t s = 0;
-            uint32_t* end = offset + offsets;
-            while(offset < end) s += *offset++ & 0xFF;
+            SparseOffset* offset = projection.getOffsets();
+            SparseOffset* end = offset + offsets;
+            while(offset < end) {
+                s += offset->getLength();
+                offset++;
+            }
             printBuffer("Constructed sparse", buffer, s, 0);
         }
         return false;
     }
 
-    IndexInserted deltaSparse(Index idx, uint32_t* deltaData, uint32_t offsets, SparseOffset* offset, bool isRoot) {
+    IndexInserted deltaSparse(Index idx, uint32_t* deltaData, uint32_t offsets, Projection offset, bool isRoot) {
         uint32_t length = idx.getLength();
-        uint64_t result = deltaSparseApply(idx.getID(), length, deltaData, offsets, offset, isRoot);
+        uint64_t result = deltaSparseApply(idx.getID(), length, 0, deltaData, offsets, offset, isRoot);
+
+        IndexInserted R(result, length);
         if(REPORT) {
-            uint32_t buffer[length];
-            get(result, buffer, isRoot);
-            printBuffer("Inserted", buffer, length, result);
+            uint32_t buffer[R.getState().getLength()];
+            get(R.getState(), buffer, isRoot);
+            printBuffer("Inserted", buffer, idx.getLength(), result);
         }
-        return IndexInserted(result, length);
+        assert(length > 0);
+        return R;
     }
 
     IndexInserted deltaSparseStride(Index idx, uint32_t* deltaData, uint32_t offsets, uint32_t* offset, uint32_t stride, bool isRoot) {
@@ -1653,52 +1714,49 @@ private:
         }
     }
 
-    void constructSparse(uint64_t idx, uint32_t length, uint32_t internalOffset, uint32_t* buffer, uint32_t offsets, SparseOffset* offset, bool isRoot) {
+    void constructSparse(uint64_t idx, uint64_t length, uint32_t internalOffset, uint32_t* buffer, uint32_t offsets, Projection projection, bool isRoot) {
+
+        SparseOffset* offset = projection.getOffsets();
 
         if(REPORT) {
-            for(int i=__builtin_clz(1 << lengthToLevel(length))-26; i--;) printf("    ");
+            for(int i=__builtin_clz(1 << lengthToLevel(length)); i--;) printf("    ");
             printf("\033[36mconstructSparse\033[0m(%zx, %u, %u, %p, [", idx, length, internalOffset >> 8, buffer);
-            uint32_t* o = offset;
-            uint32_t* e = offset + offsets;
+            SparseOffset* o = offset;
+            SparseOffset* e = offset + offsets;
             while(o<e) {
                 if(o != offset) printf(", ");
-                printf("%x", *o);
+                printf("%u@%u", o->getLength(), o->getOffset());
                 o++;
             }
             printf("])\n");
         }
 
-        if(offsets == 1) {
-            constructPartial(idx, length, (offset[0] - internalOffset) >> 8, *offset & 0xFFULL, buffer, isRoot);
+        if(dtree_unlikely(offsets == 1)) {
+            constructPartial(idx, length, (offset->getData() - internalOffset) >> 8, offset->getLength(), buffer, isRoot);
             return;
         }
 
-        if(length == 2) {
-            *(uint64_t*)buffer = construct(idx, 0, length);
+        // If we have more than two offsets and length == 2, we can simply construct the length 2 vector
+        if(dtree_unlikely(length == 2)) {
+            *(uint64_t*)buffer = construct(idx, 0, length, isRoot);
             return;
         }
 
-        uint64_t mapped = construct(idx, 0, length);
+        uint64_t mapped = construct(idx, 0, length, isRoot);
         uint32_t level = lengthToLevel(length);
 
         uint32_t leftLength = 1 << level;
         uint32_t leftLength2 = leftLength << 8;
 
+        // This is the start of the right side of the tree in the entire vector, encoded as SparseOffset
+        uint32_t offsetLeft = internalOffset + leftLength2;
+
         uint32_t leftOffsets = 0;
         uint32_t leftOffsetSizeTotal = 0;
-        uint32_t offsetLeft = internalOffset + leftLength2;
-        while(leftOffsets < offsets && offset[leftOffsets] < offsetLeft) {
-            leftOffsetSizeTotal += offset[leftOffsets] & 0xFF;
+        while(leftOffsets < offsets && offset[leftOffsets].getData() < offsetLeft) {
+            leftOffsetSizeTotal += offset[leftOffsets].getLength();
             ++leftOffsets;
         }
-
-//        // Fix the offsets of the right offsets
-//        for(uint32_t r = leftOffsets; r < offsets; ++r) {
-//            offset[r] -= leftLength2;
-//        }
-
-//        printf("left offsets:        %u\n", leftOffsets);
-//        printf("leftOffsetSizeTotal: %u\n", leftOffsetSizeTotal);
 
         // If the left side is touched
         if(leftOffsets > 0) {
@@ -1706,14 +1764,11 @@ private:
 
             // If there is overlap in change from left and right, we need to split them up...
             uint32_t last = leftOffsets - 1;
-            int32_t overlap = ((((int32_t)(offset[last] - offsetLeft)) >> 8) + (offset[last] & 0xFF));
-//            printf("overlap: %i (%i + %u)\n", overlap, (((int32_t)(offset[last] - offsetLeft)) >> 8), (offset[last] & 0xFF));
+            int32_t overlap = (((int32_t)(offset[last].getData() - offsetLeft)) >> 8) + offset[last].getLength();
             if(overlap > 0) {
 
                 // Cut off the part that affects the right side
-                offset[last] -= overlap;
-
-                // problem is that we need to add offsetLeft again, so maybe changing the offsets on the fly (the commented while loop) is not so bad...
+                offset[last]._data -= overlap;
 
                 // Construct the left part
                 constructSparse(mapped & 0xFFFFFFFFULL, leftLength, internalOffset, buffer, leftOffsets, offset, false);
@@ -1773,64 +1828,67 @@ private:
 
     }
 
-    uint64_t deltaSparseApply(uint64_t idx, uint64_t length, uint32_t* buffer, uint32_t offsets, SparseOffset* offset, bool isRoot) {
+    uint64_t deltaSparseApply(uint64_t idx, uint64_t length, uint32_t internalOffset, uint32_t* delta, uint32_t offsets, Projection projection, bool isRoot) {
+
+        SparseOffset* offset = projection.getOffsets();
 
         if(REPORT) {
-//            for(int i=__builtin_clz(1 << lengthToLevel(length))-26; i--;) printf("    ");
-            printf("deltaSparseApply(%zu, %zu, [", idx, length);
-            uint32_t* o = offset;
-            uint32_t* e = offset + offsets;
+            for(int i=__builtin_clz(1 << lengthToLevel(length)); i--;) printf("    ");
+            printf("\033[36mdeltaSparseApply\033[0m(%zx, %u, %u, %p, [", idx, length, internalOffset >> 8, delta);
+            SparseOffset* o = offset;
+            SparseOffset* e = offset + offsets;
             while(o<e) {
                 if(o != offset) printf(", ");
-                printf("%x", *o);
+                printf("%u@%u", o->getLength(), o->getOffset());
                 o++;
             }
             printf("])\n");
         }
 
-        if(offsets == 1) {
-            return deltaApply(idx, length, offset[0] >> 8, offset[0] & 0xFFULL, buffer, isRoot);
+        if(dtree_unlikely(offsets == 1)) {
+            return deltaApply(idx, length, (offset->getData() - internalOffset) >> 8, offset->getLength(), delta, isRoot);
         }
 
+        // If we have more than two offsets and length == 2, we can simply apply both
+        if(dtree_unlikely(length == 2)) {
+            return deconstruct(((uint64_t)delta[0]) | ((uint64_t)delta[1] << 32), 0, 2, isRoot );
+        }
+
+        uint64_t mapped = construct(idx, 0, length, isRoot);
         uint32_t level = lengthToLevel(length);
-        uint64_t mapped = construct(idx, level, length, isRoot);
 
         uint32_t leftLength = 1 << level;
         uint32_t leftLength2 = leftLength << 8;
 
+        // This is the start of the right side of the tree in the entire vector, encoded as SparseOffset
+        uint32_t offsetLeft = internalOffset + leftLength2;
+
         uint32_t leftOffsets = 0;
         uint32_t leftOffsetSizeTotal = 0;
-        while(leftOffsets < offsets && offset[leftOffsets] < leftLength2) {
-            leftOffsetSizeTotal += offset[leftOffsets] & 0xFF;
+        while(leftOffsets < offsets && offset[leftOffsets].getData() < offsetLeft) {
+            leftOffsetSizeTotal += offset[leftOffsets].getLength();
             ++leftOffsets;
         }
-
-        // Fix the offsets of the right offsets
-        for(uint32_t r = leftOffsets; r < offsets; ++r) {
-            offset[r] -= leftLength2;
-        }
-
-        uint64_t leftIndex;
-        uint64_t rightIndex;
+        uint64_t newMapped = mapped;
 
         // If the left side is touched
         if(leftOffsets > 0) {
 
+
             // If there is overlap in change from left and right, we need to split them up...
             uint32_t last = leftOffsets - 1;
-            int32_t overlap = ((offset[last] >> 8) + (offset[last] & 0xFF)) - (int32_t)leftLength;
-
+            int32_t overlap = (((int32_t)(offset[last].getData() - offsetLeft)) >> 8) + offset[last].getLength();
             if(overlap > 0) {
 
                 // Cut off the part that affects the right side
-                offset[last] -= overlap;
+                offset[last]._data -= overlap;
 
                 // Construct the left part
-                leftIndex = deltaSparseApply(mapped & 0xFFFFFFFFULL, leftLength, buffer, leftOffsets, offset, false);
+                newMapped = (newMapped & 0xFFFFFFFF00000000ULL) | (deltaSparseApply(mapped & 0xFFFFFFFFULL, leftLength, internalOffset, delta, leftOffsets, offset, false) & 0xFFFFFFFFULL);
 
                 // Overwrite the last "left offset" with a new offset that describes
                 // the part that was just cut off
-                offset[last] = overlap;
+                offset[last] = overlap + offsetLeft;
 
                 // Decrement the number of left offsets such that this new one is picked
                 // up later by the recursive call for the right side
@@ -1840,21 +1898,16 @@ private:
                 leftOffsetSizeTotal -= overlap;
             } else {
                 // Construct the left part
-                leftIndex = deltaSparseApply(mapped & 0xFFFFFFFFULL, leftLength, buffer, leftOffsets, offset, false);
+                newMapped = (newMapped & 0xFFFFFFFF00000000ULL) | (deltaSparseApply(mapped & 0xFFFFFFFFULL, leftLength, internalOffset, delta, leftOffsets, offset, false) & 0xFFFFFFFFULL);
             }
 
-        } else {
-            leftIndex = mapped & 0xFFFFFFFFULL;
         }
 
         // If the right side is touched
         if(leftOffsets < offsets) {
-            rightIndex = deltaSparseApply(mapped >> 32ULL, length - leftLength, buffer + leftOffsetSizeTotal, offsets - leftOffsets, offset + leftOffsets, false);
-            rightIndex <<= 32ULL;
-        } else {
-            rightIndex = mapped & 0xFFFFFFFF00000000ULL;
+            newMapped = (newMapped & 0xFFFFFFFFULL) | (deltaSparseApply(mapped >> 32ULL, length - leftLength, offsetLeft, delta + leftOffsetSizeTotal, offsets - leftOffsets, offset + leftOffsets, false) << 32);
         }
-        return deconstruct(leftIndex | rightIndex, level, length, isRoot);
+        return deconstruct(newMapped, level, length, isRoot);
     }
 
     uint64_t deltaSparseApply(uint64_t idx, uint64_t length, uint32_t internalOffset, uint32_t* buffer, uint32_t offsets, uint32_t* offset, uint32_t stride, bool isRoot) {
