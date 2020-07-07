@@ -2040,8 +2040,8 @@ private:
             uint32_t leftDeltaLength = leftLength - offset;
             if(leftDeltaLength < deltaLength) {
                 mappedNew = (deltaApply(node.getLeft(), leftLength, offset, leftDeltaLength, data, false) & 0xFFFFFFFFULL)
-                       | ((deltaApply(node.getRight(), length-leftLength, 0, deltaLength - leftDeltaLength, data + leftDeltaLength, false)) << 32)
-                       ;
+                          | ((deltaApply(node.getRight(), length-leftLength, 0, deltaLength - leftDeltaLength, data + leftDeltaLength, false)) << 32)
+                          ;
             } else {
 //                *((uint32_t*)(mapped)) = deltaApply(mapped & 0xFFFFFFFFULL, leftLength, offset, leftDeltaLength, data);
                 mappedNew = deltaApply(node.getLeft(), leftLength, offset, deltaLength, data, false) & 0xFFFFFFFFULL;
@@ -2065,7 +2065,6 @@ private:
         assert(length > 0);
 
         if(REPORT) {
-//            for(int i=__builtin_clz(1 << lengthToLevel(length))-26; i--;) printf("    ");
             printf("deltaApplyMapped(%zx, %zuB, %uB, %uB, %p)\n", node.getData(), length << 2, offset << 2, deltaLength << 2, data);
         }
 
@@ -2074,7 +2073,7 @@ private:
             // This is >= instead of == because in some edge cases deltaApply() may be called with a
             // deltaLength larger than the length, in which case only length bytes should be copied.
             if (deltaLength >= 2) {
-                return *(uint64_t*)data;//deconstruct(*(uint64_t*)data, 0, length, isRoot);
+                return *(uint64_t*)data;
             } else {
                 if(offset == 0) {
                     node.setLeft(*data);
@@ -2082,7 +2081,7 @@ private:
                     node.setRight(*data);
                 }
                 if(length == 1) assert(node.getRight() == 0);
-                return node.getData();//deconstruct(node.getData(), 0, length, isRoot);
+                return node.getData();
             }
         }
 
@@ -2095,24 +2094,18 @@ private:
             uint32_t leftDeltaLength = leftLength - offset;
             if(leftDeltaLength < deltaLength) {
                 mappedNew = (deltaApply(node.getLeft(), leftLength, offset, leftDeltaLength, data, false) & 0xFFFFFFFFULL)
-                            | ((deltaApply(node.getRight(), length-leftLength, 0, deltaLength - leftDeltaLength, data + leftDeltaLength, false)) << 32)
-                        ;
+                          | ((deltaApply(node.getRight(), length-leftLength, 0, deltaLength - leftDeltaLength, data + leftDeltaLength, false)) << 32)
+                          ;
             } else {
-//                *((uint32_t*)(mapped)) = deltaApply(mapped & 0xFFFFFFFFULL, leftLength, offset, leftDeltaLength, data);
                 mappedNew = deltaApply(node.getLeft(), leftLength, offset, deltaLength, data, false) & 0xFFFFFFFFULL;
                 mappedNew |= node.getRightPart();
             }
         } else {
-//            *((uint32_t*)(mapped)+1) = deltaApply(mapped >> 32ULL, length-leftLength, offset - leftLength, deltaLength, data);
             mappedNew = deltaApply(node.getRight(), length-leftLength, offset - leftLength, deltaLength, data, false) << 32;
             mappedNew |= node.getLeftPart();
         }
 
-//        if(node.getData() == mappedNew) {
-//            return idx;
-//        } else {
-            return mappedNew;//deconstruct(mappedNew, level, length, isRoot);
-//        }
+        return mappedNew;
     }
 
 //    uint32_t deltaApplyInBytes(uint64_t idx, uint32_t lengthInBytes, uint32_t offsetInBytes, uint32_t deltaLengthInBytes, uint8_t* data) {
@@ -2211,40 +2204,7 @@ private:
             // This can only happen for [original][delta]
             return deconstruct( ((uint64_t)idx) | (((uint64_t)(*(uint32_t*)data)) << 32), 0, newLength, toRoot);
 
-//            // Options are:
-//            // [original[delta]
-//            //
-//            printf("             %4u %4u %4u lolo\n", length, offset, deltaLength);
-//
-//            // If the length is
-//            if(offset == 0) {
-//                return deconstruct(*(uint64_t*)data);
-//            }
-//
-//            // Given the offset is 1 and if the length is 0, the left part is
-//            // 0 and the right part comes from the delta
-//            if(length == 0) {
-//                return deconstruct( ((uint64_t)(*(uint32_t*)data)) << 32);
-//            }
-//
-//            // Given offset is 1 and length is 1, the left part must be from the original
-//            // and the right part
-//            return deconstruct( ((uint64_t)idx) | (((uint64_t)(*(uint32_t*)data)) << 32) );
         }
-//        if(length == 2) {
-//            if(offset == 0) {
-//                if (deltaLength == 2) {
-//                    return deconstruct(*(uint64_t*)data);
-//                } else {
-//                    mapped &= 0xFFFFFFFF00000000ULL;
-//                    mapped |= *data;
-//                }
-//            } else {
-//                mapped &= 0x00000000FFFFFFFFULL;
-//                mapped |= ((uint64_t)*data) << 32;
-//            }
-//            return deconstruct(mapped);
-//        }
 
         uint32_t level = lengthToLevel(newLength);
         uint32_t leftLength = 1 << level;
@@ -2278,45 +2238,6 @@ private:
         }
 
         return deconstruct(((uint64_t)leftIndex) | (((uint64_t)rightIndex) << 32), level, newLength, toRoot);
-/*
-            // If the left part contains part of the original
-            if(length > 0) {
-                if(REPORT) printf("Need to extend left part using delta, rightOffset=%u\n", rightOffset);
-                newIndex = extendRecursive(idx, length, offset, -rightOffset, data);
-            } else {
-                if(REPORT) printf("Detected zeros on the left\n");
-                newIndex = 0;
-            }
-
-
-        uint64_t rightIndex = 0;
-        if(deltaLength <= 0) {
-            if(length == 0) {
-                if(REPORT) printf("Detected zeros on the right\n");
-                // leave 0
-            } else {
-                if(mapped == 0) mapped = _hashSet.get(idx);
-                rightIndex = extendRecursive(mapped >> 32, );
-            }
-
-        // If the remainder is only delta
-        } else if(rightOffset <= 0) {
-            if(REPORT) printf("Deconstructing the rest (%u)\n", deltaLength - rightOffset);
-            rightIndex = deconstruct(data-rightOffset, deltaLength - rightOffset);
-
-        // If there is part of the original in the right part
-        } else if(length > leftLength) {
-            if(mapped == 0) mapped = _hashSet.get(idx);
-            rightIndex = extendRecursive(mapped >> 32, length - leftLength, offset, deltaLength, data);
-
-        // If there are only 0's and delta remaining
-        } else {
-            if(mapped == 0) mapped = _hashSet.get(idx);
-            rightIndex = extendRecursive(0, 0, rightOffset, newLength - zeroExtendedLength, data);
-        }
-
-        return deconstruct(((uint64_t)rightIndex) << 32 | (uint64_t)newIndex);
-*/
     }
 
     uint64_t zeroExtend(uint64_t idx, uint64_t length, uint32_t extendTo, bool isRoot, bool toRoot) {
@@ -2339,15 +2260,6 @@ private:
 
         // If the left part contains 0's
         } else {
-
-//            abort();
-            // this will go wrong because the root is at a different level
-            // if we use isRoot = false. then the new one will not be inserted as root
-            // if we pass on isRoot, then the next construct() might use isRoot=true,
-            // even though that one should actually use false.
-            // WE CAN FIX THIS WITH A FOR-LOOP
-            // We fixed it now using toRoot
-
             return deconstruct(zeroExtend(idx, length, leftLength, isRoot, false) & 0xFFFFFFFFULL, level, extendTo, toRoot);
         }
     }
