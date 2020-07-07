@@ -460,6 +460,16 @@ TreeDBSLLfop_incr_ref (const treedbs_ll_t dbs, tree_t prev,
         *((uint64_t*)next) = res;
         //TODO: there's code here that breaks strict aliasing, which can lead to weird stuff. The same applies to
         //      Alfons' original code
+#ifndef NDEBUG
+        if((*((uint64_t*)next) & 0xFFFFFF0000000000ULL) != 0) {
+            fprintf(stderr, "next[0] contains length\n");
+            fprintf(stderr, "next[0]:  %x\n", next[0]);
+            fprintf(stderr, "next[1]:  %x\n", next[1]);
+            fprintf(stderr, "i64 next: %zx\n", (*((uint64_t*)next)));
+            fprintf(stderr, "length:   %zu\n", (*((uint64_t*)next)) >> 40);
+            abort();
+        }
+#endif
     } else {
         if(seen >= 0 && !cmp_i64(prev, next, 1)) {
             if(dbs->slim) {
@@ -474,9 +484,18 @@ TreeDBSLLfop_incr_ref (const treedbs_ll_t dbs, tree_t prev,
                 //TODO: there's code here that breaks strict aliasing, which can lead to weird stuff. The same applies to
                 //      Alfons' original code
             }
+#ifndef NDEBUG
+            if((*((uint64_t*)next) & 0xFFFFFF0000000000ULL) != 0) {
+                fprintf(stderr, "next[0] contains length\n");
+                fprintf(stderr, "next[0]:  %x\n", next[0]);
+                fprintf(stderr, "next[1]:  %x\n", next[1]);
+                fprintf(stderr, "i64 next: %zx\n", (*((uint64_t*)next)));
+                fprintf(stderr, "length:   %zu\n", (*((uint64_t*)next)) >> 40);
+                abort();
+            }
+#endif
         }
     }
-    assert((*((uint64_t*)next) & 0xFFFFFF0000000000ULL) == 0);
     *ref = TreeDBSLLindex(dbs, next);
     assert(*ref != 0xFFFFFFFFFFFFFFFFULL);
     return seen;
