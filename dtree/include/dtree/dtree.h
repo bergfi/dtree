@@ -679,7 +679,7 @@ public:
 
         __attribute__((always_inline))
         uint32_t getOffsetPart() const {
-            return _data & 0xFF000000;
+            return _data & 0xFFFFFF00;
         }
 
         __attribute__((always_inline))
@@ -695,6 +695,90 @@ public:
         uint32_t _data;
     };
 
+    struct MultiOffset {
+
+    public:
+        enum class Options {
+            NONE,
+            READ,
+            WRITE,
+            READ_WRITE
+        };
+    public:
+        __attribute__((always_inline))
+        constexpr MultiOffset(uint32_t const& offset, uint32_t const& options): _data(offset | (options << 24)) {}
+
+        __attribute__((always_inline))
+        constexpr MultiOffset(uint32_t const& data): _data(data) {}
+
+        __attribute__((always_inline))
+        constexpr MultiOffset(): _data(0) {}
+    public:
+
+        __attribute__((always_inline))
+        void init(uint32_t const& offset, uint32_t const& options) {
+            _data = offset | (options << 24);
+        }
+
+        __attribute__((always_inline))
+        uint32_t getOffset() const {
+            return _data & 0xFFFFFF;
+        }
+
+        __attribute__((always_inline))
+        Options getOptions() const {
+            return (Options)(_data >> 24);
+        }
+
+        __attribute__((always_inline))
+        bool operator<(SparseOffset const& other) {
+            return _data < other._data;
+        }
+
+        __attribute__((always_inline))
+        uint32_t getData() const {
+            return _data;
+        }
+
+        bool operator==(MultiOffset const& other) const {
+            return _data == other._data;
+        }
+
+        bool operator==(uint32_t const& data) const {
+            return _data == data;
+        }
+
+        uint32_t _data;
+    };
+
+    struct LengthAndOffset: private MultiOffset {
+    public:
+        __attribute__((always_inline))
+        constexpr LengthAndOffset(uint32_t const& length, uint32_t const& offsets): MultiOffset(length, offsets) {}
+
+        __attribute__((always_inline))
+        constexpr LengthAndOffset(uint32_t const& data): MultiOffset(data) {}
+
+        __attribute__((always_inline))
+        constexpr LengthAndOffset(): MultiOffset() {}
+    public:
+
+        __attribute__((always_inline))
+        void init(uint32_t const& length, uint32_t const& offsets) {
+            this->_data = length | (offsets << 24);
+        }
+
+        __attribute__((always_inline))
+        uint32_t getLength() const {
+            return this->_data & 0xFFFFFF;
+        }
+
+        __attribute__((always_inline))
+        uint32_t getOffsets() const {
+            return this->_data >> 24;
+        }
+    };
+
     struct Projection {
     public:
         constexpr Projection(SparseOffset* const& offsets): _offsets(offsets) {}
@@ -707,6 +791,102 @@ public:
         }
 
         SparseOffset* _offsets;
+    };
+
+    struct MultiProjection {
+    public:
+
+        struct SingleProjection {
+
+            SingleProjection() {}
+
+            SingleProjection(uint32_t options, uint32_t length, std::initializer_list<uint32_t> offsets) {
+                int i = 0;
+                for(auto& o: offsets) {
+                    _data[i++].init(options, o);
+                }
+                lando.init(i, length); // TODO: determine if we want nr of offsets or stride
+            }
+
+            typename MultiOffset::Options getOptions() const {
+                return _data[0].getOptions();
+            }
+
+            LengthAndOffset getLengthAndOffsets() const {
+                return lando;
+            }
+
+            MultiOffset* getOffsets() {
+                return _data;
+            }
+
+            MultiOffset& getOffset(uint32_t level) {
+                return _data[level];
+            }
+
+            MultiOffset const& getOffset(uint32_t level) const {
+                return _data[level];
+            }
+
+            uint32_t getLength(uint32_t level) const {
+                return (level < lando.getOffsets() - 1) ? 2 : lando.getLength();
+            }
+
+            friend std::ostream& operator<<(std::ostream& out, SingleProjection const& p) {
+                out << p.getLengthAndOffsets().getLength();
+                out << "@( ";
+                for(size_t o = 0; o < p.getLengthAndOffsets().getOffsets(); ++o) {
+                    out << p.getOffset(o).getOffset() << " ";
+                }
+                out << ")";
+                return out;
+            }
+
+            LengthAndOffset lando;
+            MultiOffset _data[];
+        };
+    public:
+
+        size_t getProjections() const {
+            return projections;
+        }
+
+        size_t getStride() const {
+            return maxDepth + 1;
+        }
+
+        SingleProjection& getProjection(size_t idx) {
+            return *(SingleProjection*)&_projections[idx * getStride()];
+        }
+
+        SingleProjection const& getProjection(size_t idx) const {
+            return *(SingleProjection*)&_projections[idx * getStride()];
+        }
+
+        void addProjection(uint32_t options, uint32_t length, std::initializer_list<uint32_t> offsets) {
+            assert(projections < maxProjections);
+            new(&getProjection(projections)) SingleProjection(options, length, offsets);
+            projections++;
+        }
+
+        friend std::ostream& operator<<(std::ostream& out, MultiProjection const& mp) {
+            out << "MultiProjection<";
+            for(size_t p = 0; p < mp.getProjections(); ++p) {
+                SingleProjection const& projection = mp.getProjection(p);
+                out << " " << projection;
+            }
+            out << " >";
+            return out;
+        }
+
+        void dump() const {
+            std::cout << *this;
+        }
+
+        uint32_t projections;
+        uint32_t maxProjections;
+        uint32_t maxDepth;
+        uint32_t _projections[];
     };
 
     struct DTreeNode {
@@ -931,6 +1111,10 @@ public:
         return true;
     }
 
+    void getPartial(Index idx, MultiProjection& projection, bool isRoot, uint32_t* buffer) {
+        multiConstruct(idx, isRoot, projection, 0, 0, projection.getProjections(), buffer);
+    }
+
 //    bool getSparseUnits(Index idx, uint32_t* buffer, uint32_t offsets, uint32_t* offset, bool isRoot) {
 //        constructSparseUnits(idx.getID(), idx.getLength(), 0, buffer, offsets, offset, isRoot);
 //        if(REPORT) {
@@ -1023,6 +1207,108 @@ public:
         }
         assert(root.getLength() > 0);
         return R;
+    }
+
+    IndexInserted delta(Index idx, MultiProjection& projection, bool isRoot, uint32_t* buffer) {
+        return multiDelta(idx, isRoot, projection, 0, 0, projection.getProjections(), buffer);
+    }
+
+
+    IndexInserted multiDeltaNaive(Index idx, bool isRoot, MultiProjection& projection, uint32_t level, uint32_t start, uint32_t end, uint32_t* buffer) {
+        uint64_t idxWithoutLength = idx.getID();
+        uint64_t length = idx.getLength();
+        uint64_t mapped = construct(idxWithoutLength, 0, length, level == 0 && isRoot);
+
+        if constexpr(REPORT) printf("%*c", level*4, ' ');
+        if constexpr(REPORT) printf("multiDeltaNaive(%zx, %u, %u, %u, %p)\n", idx, level, start, end, buffer);
+
+        uint32_t* bufferPosition = buffer;
+
+        auto projections = projection.getProjections();
+
+        uint64_t jump[projections];
+        uint64_t jumps = 0;
+
+        // Go through all projections to find the required data in the current tree
+        for(uint32_t pid = start; pid < end;) {
+            if constexpr(REPORT) printf("%*c", level*4, ' ');
+            if constexpr(REPORT) printf("pid %u\n", pid);
+            auto& p = projection.getProjection(pid);
+
+            LengthAndOffset lando = p.getLengthAndOffsets();
+            uint32_t len = lando.getLength();
+
+            // If the current projection projects to the current tree
+            if(level == lando.getOffsets() - 1) {
+                mapped = deltaMapped2(mapped, length, projection.getProjection(pid).getOffset(level).getOffset(), len, bufferPosition);
+                if constexpr(REPORT) {
+                    printf("%*c", level*4, ' ');
+                    printf("apply local delta, deltaMapped2() -> %zx, copied", mapped);
+                    for(uint32_t l = 0; l < len; ++l) {
+                        printf(" %x", bufferPosition[l]);
+                    }
+                    printf("\n");
+                }
+                ++pid;
+            }
+
+                // If the current projection projects to another tree, get the index of that tree in order to jump
+            else {
+                uint32_t currentOffset = p.getOffset(level).getOffset();
+                assert((currentOffset & 0x1) == 0);
+                pid++;
+                while(projection.getProjection(pid).getOffset(level).getOffset() == currentOffset) {
+                    bufferPosition += projection.getProjection(pid).getLengthAndOffsets().getLength();
+                    pid++;
+                }
+
+                traverse2(mapped, length, currentOffset, 2, &std::remove_pointer<decltype(this)>::type::traverseP2_construct, &std::remove_pointer<decltype(this)>::type::traverseP2_construct12, (uint32_t*)(&jump[jumps]));
+                if constexpr(REPORT) printf("%*c", level*4, ' ');
+                if constexpr(REPORT) printf("get subtree index, traverse2(%zx, %u, %u, 2, %p) -> %zx\n", mapped, length, currentOffset, (uint32_t*)(&jump[jumps]), jump[jumps]);
+                jumps++;
+            }
+            bufferPosition += len;
+
+        }
+
+        jumps = 0;
+
+        // Go through all projections to find the jumps and traverse them
+        bufferPosition = buffer;
+        for(uint32_t pid = start; pid < end;) {
+            auto& p = projection.getProjection(pid);
+
+            LengthAndOffset lando = p.getLengthAndOffsets();
+
+            //
+            if(level < lando.getOffsets() - 1) {
+                uint32_t currentOffset = p.getOffset(level).getOffset();
+                assert((currentOffset & 0x1) == 0);
+
+                uint32_t pidEnd = pid + 1;
+                auto bufferPositionCurrent = bufferPosition;
+                while(projection.getProjection(pidEnd).getOffset(level) == currentOffset) {
+                    bufferPosition += projection.getProjection(pidEnd).getLengthAndOffsets().getLength();
+                    pidEnd++;
+                }
+
+                if constexpr(REPORT) printf("%*c", level*4, ' ');
+                if constexpr(REPORT) printf("go into subtree\n");
+                auto newIdx = multiDeltaNaive(jump[jumps], false, projection, level+1, pid, pidEnd, bufferPositionCurrent);
+                uint64_t m = newIdx.getState().getData();
+                mapped = deltaMapped2(mapped, length, currentOffset, 2, (uint32_t*) &m);
+                if constexpr(REPORT) printf("%*c", level*4, ' ');
+                if constexpr(REPORT) printf("apply new subtree index %zx, deltaMapped2() -> %zx\n", m, mapped);
+                pid = pidEnd;
+            } else {
+                ++pid;
+            }
+            bufferPosition += lando.getLength();
+
+        }
+        if constexpr(REPORT) printf("%*c", level*4, ' ');
+        if constexpr(REPORT) printf("returning %zx\n", mapped);
+        return IndexInserted(deconstruct(mapped, 0, length, isRoot && level == 0), length);
     }
 
     /**
@@ -1524,7 +1810,6 @@ private:
         if(REPORT) printf("constructP2Mapped(%zx, %u)\n", mapped, length);
 
         bufferDest[0] = mapped;
-
         for(uint32_t levelLength = 2; levelLength < length; levelLength <<=1) {
             for(uint32_t i = levelLength; i--;) {
                 bufferDest[i] = construct(buffer[i], false);
@@ -1720,7 +2005,7 @@ private:
 
         if(REPORT) {
             for(int i=__builtin_clz(1 << lengthToLevel(length)); i--;) printf("    ");
-            printf("\033[36mconstructSparse\033[0m(%zx, %u, %u, %p, [", idx, length, internalOffset >> 8, buffer);
+            printf("\033[36mconstructSparse\033[0m(%zx, %zu, %u, %p, [", idx, length, internalOffset >> 8, buffer);
             SparseOffset* o = offset;
             SparseOffset* e = offset + offsets;
             while(o<e) {
@@ -1834,7 +2119,7 @@ private:
 
         if(REPORT) {
             for(int i=__builtin_clz(1 << lengthToLevel(length)); i--;) printf("    ");
-            printf("\033[36mdeltaSparseApply\033[0m(%zx, %u, %u, %p, [", idx, length, internalOffset >> 8, delta);
+            printf("\033[36mdeltaSparseApply\033[0m(%zx, %zu, %u, %p, [", idx, length, internalOffset >> 8, delta);
             SparseOffset* o = offset;
             SparseOffset* e = offset + offsets;
             while(o<e) {
@@ -2369,7 +2654,51 @@ private:
         }
     }
 
-//    uint32_t extendRecursive(uint64_t idx, uint32_t length, uint32_t offset, int32_t deltaLength, uint32_t* data) {
+    void constructTree(uint64_t mapped, uint32_t length, uint64_t* buffer) {
+        uint32_t* __attribute__((__may_alias__)) bufferSrc = (uint32_t*)buffer;
+        uint64_t* __attribute__((__may_alias__)) bufferDest = buffer;
+
+        if(REPORT) printf("constructTree(%zx, %u)\n", mapped, length);
+
+        bufferDest[1] = mapped;
+
+        // mapped = [5 6]
+        // length = 8
+        // a b c d e f g h
+        //  1   2   3   4
+        //    5       6
+        //        7
+        //
+        // buffer: . . [5 6] [1 2] [3 4] [a b] [c d] [e f] [g h]
+
+        for(uint32_t i = 2; i < length; ++i) {
+            bufferDest[i] = construct(bufferSrc[i], false);
+//            printf("%2u: %16zx <- %8x\n", i, bufferDest[i], bufferSrc[i]); fflush(stdout);
+        }
+    }
+
+    uint64_t deconstructTree(uint32_t length, uint64_t* buffer) {
+        uint64_t* __attribute__((__may_alias__)) bufferSrc = buffer;
+        uint32_t* __attribute__((__may_alias__)) bufferDest = (uint32_t*)buffer;
+
+        // mapped = [5 6]
+        // length = 8
+        // a b c d e f g h
+        //  1   2   3   4
+        //    5       6
+        //        7
+        //
+        // buffer: . . [5 6] [1 2] [3 4] [a b] [c d] [e f] [g h]
+
+        for(uint32_t i = length - 1; i > 1; --i) {
+            bufferDest[i] = deconstruct(bufferSrc[i], false);
+//            printf("%2u: %16zx -> %8x\n", i, bufferSrc[i], bufferDest[i]); fflush(stdout);
+        }
+        if(REPORT) printf("deconstructTree(%u, %p) -> %zx\n", length, buffer, bufferSrc[1]);
+        return bufferSrc[1];
+    }
+
+    //    uint32_t extendRecursive(uint64_t idx, uint32_t length, uint32_t offset, int32_t deltaLength, uint32_t* data) {
 //        uint64_t newLength = length + (uint64_t)offset + (uint64_t)deltaLength;
 //
 //        if(REPORT) printf("Extending %x(%u) at %u with ...(%u)\n", idx, length, offset, deltaLength);
@@ -2437,6 +2766,1631 @@ private:
 //        return deconstruct(((uint64_t)rightIndex) << 32 | (uint64_t)newIndex);
 //
 //    }
+
+    void multiConstruct(Index idx, bool isRoot, MultiProjection& projection, uint32_t level, uint32_t start, uint32_t end, uint32_t* buffer) {
+        uint64_t idxWithoutLength = idx.getID();
+        uint64_t length = idx.getLength();
+        uint64_t mapped = construct(idxWithoutLength, 0, length, level == 0 && isRoot);
+
+        if constexpr(REPORT) printf("%*c", level*4, ' ');
+        if constexpr(REPORT) printf("multiConstruct(%zx, %u, %u, %u, %p)\n", idx, level, start, end, buffer);
+        if constexpr(REPORT) printf("%*c", level*4, ' ');
+        if constexpr(REPORT) std::cout << projection << std::endl;
+
+        uint32_t* bufferPosition = buffer;
+
+        auto projections = projection.getProjections();
+
+        uint64_t jump[projections];
+        uint64_t jumps = 0;
+
+        if constexpr(REPORT) printf("%*c", level*4, ' ');
+        if constexpr(REPORT) printf("perform constructs and gather jumps\n");
+
+        // Go through all projections to find the required data in the current tree
+        for(uint32_t pid = start; pid < end;) {
+            if constexpr(REPORT) printf("%*c", level*4, ' ');
+            if constexpr(REPORT) printf("pid %u\n", pid);
+            auto& p = projection.getProjection(pid);
+
+            LengthAndOffset lando = p.getLengthAndOffsets();
+            uint32_t len = lando.getLength();
+
+            // If the current projection projects to the current tree, get the data and write it to the buffer
+            if(level == lando.getOffsets() - 1) {
+                if constexpr(REPORT) printf("%*c", level*4, ' ');
+                if constexpr(REPORT) printf("traverse2 for construct\n");
+                traverse2(mapped, length, p.getOffset(level).getOffset(), len, &std::remove_pointer<decltype(this)>::type::traverseP2_construct, &std::remove_pointer<decltype(this)>::type::traverseP2_construct12, bufferPosition);
+                ++pid;
+            }
+
+            // If the current projection projects to another tree, get the index of that tree in order to jump
+            else {
+                uint32_t currentOffset = p.getOffset(level).getOffset();
+                assert((currentOffset & 0x1) == 0);
+                ++pid;
+                while(pid < end && projection.getProjection(pid).getOffset(level).getOffset() == currentOffset) {
+                    if constexpr(REPORT) printf("%*c", level*4, ' ');
+                    if constexpr(REPORT) printf("pid %u has same offset\n", pid);
+                    pid++;
+                    bufferPosition += projection.getProjection(pid).getLengthAndOffsets().getLength();
+                }
+
+                if constexpr(REPORT) printf("%*c", level*4, ' ');
+                if constexpr(REPORT) printf("traverse2(%zx, %u, %u, 2, %p)\n", mapped, length, currentOffset, (uint32_t*)(&jump[jumps]));
+                traverse2(mapped, length, currentOffset, 2, &std::remove_pointer<decltype(this)>::type::traverseP2_construct, &std::remove_pointer<decltype(this)>::type::traverseP2_construct12, (uint32_t*)(&jump[jumps]));
+                if constexpr(REPORT) printf("%*c", level*4, ' ');
+                if constexpr(REPORT) printf("traverse2 for jump, jump[%u] = %zx\n", jumps, jump[jumps]);
+                jumps++;
+            }
+            bufferPosition += len;
+        }
+
+        if constexpr(REPORT) printf("%*c", level*4, ' ');
+        if constexpr(REPORT) printf("found %u jumps\n", jumps);
+
+        jumps = 0;
+
+        if constexpr(REPORT) printf("%*c", level*4, ' ');
+        if constexpr(REPORT) printf("perform jumps\n");
+        // Go through all projections to find the jumps and traverse them
+        bufferPosition = buffer;
+        for(uint32_t pid = start; pid < end;) {
+            auto& p = projection.getProjection(pid);
+
+            LengthAndOffset lando = p.getLengthAndOffsets();
+            uint32_t len = lando.getLength();
+
+            //
+            if(level < lando.getOffsets() - 1) {
+                uint32_t currentOffset = p.getOffset(level).getOffset();
+                assert((currentOffset & 0x1) == 0);
+
+                uint32_t pidEnd = pid + 1;
+                auto bufferPositionCurrent = bufferPosition;
+                while(pidEnd < end && projection.getProjection(pidEnd).getOffset(level).getOffset() == currentOffset) {
+                    pidEnd++;
+                    bufferPosition += projection.getProjection(pidEnd).getLengthAndOffsets().getLength();
+                }
+
+                if constexpr(REPORT) printf("%*c", level*4, ' ');
+                if constexpr(REPORT) printf("jumping...\n");
+                multiConstruct(jump[jumps++], false, projection, level+1, pid, pidEnd, bufferPositionCurrent);
+                pid = pidEnd;
+            } else {
+                ++pid;
+            }
+            bufferPosition += len;
+        }
+        if constexpr(REPORT) printf("%*c", level*4, ' ');
+        if constexpr(REPORT) printf("DONE\n");
+    }
+
+    uint32_t multiConstructJumpsOnly(Index idx, MultiProjection& projection, uint32_t level, uint32_t start, uint32_t end, uint64_t* jump) {
+        uint64_t idxWithoutLength = idx.getID();
+        uint64_t length = idx.getLength();
+        uint64_t mapped = construct(idxWithoutLength, 0, length, level == 0);
+
+        auto projections = projection.getProjections();
+
+        uint64_t jumps = 0;
+
+        // Go through all projections to find the required data in the current tree
+        for(uint32_t pid = 0; pid < projections;) {
+            auto& p = projection.getProjection(pid);
+
+            LengthAndOffset lando = p.getLengthAndOffsets();
+
+            // If the current projection projects to the current tree, skip
+            if(level == lando.getOffsets() - 1) {
+                ++pid;
+            }
+
+            // If the current projection projects to another tree, get the index of that tree in order to jump
+            else {
+                uint32_t currentOffset = p.getOffset(level).getOffset();
+                assert((currentOffset & 0x1) == 0);
+                while(projection.getProjection(pid).getOffset(level) == currentOffset) pid++;
+
+                traverse2(mapped, length, currentOffset, 2, &std::remove_pointer<decltype(this)>::type::traverseP2_construct, &std::remove_pointer<decltype(this)>::type::traverseP2_construct12, jump+jumps);
+                jumps++;
+            }
+
+        }
+        return jumps;
+
+    }
+
+    IndexInserted multiDelta(Index idx, bool isRoot, MultiProjection& projection, uint32_t level, uint32_t start, uint32_t end, uint32_t* buffer) {
+//        traverse2(idx, projection, level, &std::remove_pointer<decltype(this)>::type::traverseP2_delta, &std::remove_pointer<decltype(this)>::type::traverseP2_delta12);
+        if(REPORT) printf("\033[35mmultiDelta\033[0m %p\n", buffer);
+        return traverse3(idx, isRoot, projection, start, end, level, &std::remove_pointer<decltype(this)>::type::traverseP2_delta, &std::remove_pointer<decltype(this)>::type::traverseP2_delta12, &buffer);
+    }
+
+//    uint32_t* multiConstructBIGBUFFER(Index idx, MultiProjection& projection, uint32_t level, uint32_t start, uint32_t end, uint32_t* buffer) {
+//        uint64_t idxWithoutLength = idx.getID();
+//        uint64_t length = idx.getLength();
+//
+//        uint64_t tree[1 << lengthToLevel()];
+//        tree[0] = idx;
+//        tree[1] = construct(idx, 0, length, level == 0);
+//        constructTree(idx, length, tree, projection, 0, start, end);
+//
+//
+//        //
+//        //   ____data____
+//        //   \   \  /   /
+//        //    \   \/   /
+//        //     \  /   /
+//        //      \ \  /
+//        //       \ \/
+//        //  ______\/___
+//        //  \     /   /
+//        //   \   /   /
+//        //    \  \  /
+//        //     \ / /
+//        //     [idx]
+//        //
+//        //
+//        //   __cdef__gh__
+//        //   \ \  /  \/ /
+//        //    \ \/   / /
+//        //     \ \  / /
+//        //      \ \/ /
+//        //       \ \/
+//        //  __ab__\/___
+//        //  \     /   /
+//        //   \   /   /
+//        //    \  \  /
+//        //     \ / /
+//        //     [idx]
+//        // MultiProjection:
+//        // [2][2]
+//        // [4][6][2]
+//        // [2][6][8]
+//
+//        auto projections = projection.getProjections();
+//
+//        for(uint32_t pid = 0; pid < projections; ++pid) {
+//            auto& p = projection.getProjection(pid);
+//
+//            // If we have reached the end of this projection
+//            if(level < p.getOffsets() - 1) {
+////                memcpy(buffer, ((uint32_t*)tree)+)
+//            } else {
+//                uint32_t currentOffset = p.getOffset(level);
+//                assert((currentOffset & 0x1) == 0);
+//
+//                uint32_t pidEnd = pid + 1;
+//                while(projection.getProjection(pid).getOffset(level) == currentOffset) pidEnd++;
+//
+//                currentOffset >>= 1;
+//                buffer = multiConstruct(&tree[currentOffset], projection, level + 1, pid, pidEnd, buffer);
+//            }
+//        }
+//        return buffer;
+//
+//    }
+
+//
+//    IndexInserted constructTree(uint64_t idx, uint32_t length, uint64_t* buffer, typename MultiProjection::SingleProjection* projection, uint32_t level, uint32_t projections) {
+//        uint32_t* srcBuffer = (uint32_t*)buffer;
+//        if(REPORT) printf("constructTree %zu %u %u\n", idx, length, level);
+//
+////        uint32_t lengths[PROJECTIONS];
+////        for(size_t i = 0; i < PROJECTIONS; ++i) {
+////            auto lengthAndOffsets = projection.getProjection(i).getLengthAndOffsets();
+////            auto offsetsMinusOne = lengthAndOffsets.getOffsets() - 1;
+////
+////            lengths[i] = level < offsetsMinusOne ? 2  // Only need to expand the node containing the index to the next tree
+////                       : level > offsetsMinusOne ? 0  // The projection projected to an earlier tree
+////                       : lengthAndOffsets.getLength() // The projection projects to a part of the current tree
+////                       ;
+////        }
+//
+//        uint32_t currentProjection = 0;
+//
+//        // Skip already finished projections
+////        while(lengths[currentProjection] == 0) currentProjection++;
+//
+//        auto projectionEnd = projection + projections;
+//
+//        //
+//        while(projection < projectionEnd) {
+//            uint32_t currentOffset = projection->getOffset(level);
+//            uint32_t currentLength = projection->getLength(level);
+//            uint32_t bufferPosition = 2;
+//            uint32_t lengthLevel = lengthToLevel(length);
+//
+//
+//            // Vector: 89ab67
+//            // 8 9 a b
+//            //  4   5   6 7
+//            //    2      3
+//            //       idx
+//            //
+//            // [idx] [2 3] [4 5] [6 7] [8 9] [a b]
+//
+//            // Vector: ghijklmn67
+//            //
+//            // g h i j k l m n
+//            //  8   9   a   b
+//            //    4       5    6 7
+//            //        2         3
+//            //             idx
+//            //
+//            // [idx] [2 3] [4 5] [6 7] [8 9] [a b] . . . . [g h] [i j] [k l] [m n]
+//
+//            struct {
+//                uint32_t pos;
+//                uint32_t length;
+//                uint32_t projectionLength;
+//            } todo[lengthLevel];
+//            uint32_t nTodo = 0;
+//
+//            traverse(buffer, bufferPosition, length, currentOffset, currentLength, nTodo, todo);
+//
+//            for(; nTodo--;) {
+//                traverse(buffer, todo[nTodo].pos, todo[nTodo].length, 0, todo[nTodo].projectionLength, nTodo, todo);
+//            }
+//
+//            projection++;
+//        }
+//    }
+//
+//    template<typename TODO>
+//    void traverse(uint64_t* buffer, uint32_t bufferPosition, uint32_t length, uint32_t currentLocalOffset, uint32_t currentLength, uint32_t& nTodo, TODO&& todo) {
+//        uint32_t lengthLevel = lengthToLevel(length);
+//        uint32_t leftLength = 1 << lengthLevel;
+//        uint32_t rightLength = length - leftLength;
+//        uint32_t* srcBuffer = (uint32_t*)buffer;
+//
+//        if(REPORT) printf("constructTree-traverse %u %u %u %u %u\n", bufferPosition, length, currentLocalOffset, currentLength, nTodo);
+//
+//        // <leftLength>
+//        // [..........][....]
+//        //
+//        //
+//        //
+//        //     [ left | right ]
+//        //
+//
+//        // Go deep into the tree, building a single branch
+//        while(currentLocalOffset > 1) {
+//
+//            // If the projection is only in the right part of the tree
+//            if(currentLocalOffset >= leftLength) {
+//                bufferPosition++;
+//                currentLocalOffset -= leftLength;
+//                leftLength = 1 << lengthToLevel(rightLength);
+//                rightLength -= leftLength;
+//            } else {
+//                // If part of the projection is in the right part of the tree
+//                int32_t overflow = currentLocalOffset + currentLength - leftLength;
+//                if(overflow > 0) {
+//                    todo[nTodo++] = {bufferPosition+1, rightLength, overflow};
+//                    if(REPORT) printf("  added TODO %u %u %u\n", bufferPosition+1, rightLength, overflow);
+//                }
+//                leftLength >>= 1;
+//                rightLength = leftLength;
+//            }
+//            buffer[bufferPosition] = construct(srcBuffer[bufferPosition], 0);
+//            bufferPosition <<= 1;
+//            if(REPORT) printf("constructTree-traverse find-left %u %u %u %u %u\n", bufferPosition, length, currentLocalOffset, currentLength, nTodo);
+//        }
+//        while(currentLocalOffset + currentLength <= leftLength) {
+//            leftLength >>= 1;
+//            buffer[bufferPosition] = construct(srcBuffer[bufferPosition], 0);
+//            bufferPosition <<= 1;
+//            if(REPORT) printf("constructTree-traverse find-right %u %u %u %u %u\n", bufferPosition, length, currentLocalOffset, currentLength, nTodo);
+//        }
+//
+//        if(REPORT) printf("constructTree-traverse found %u %u %u %u %u\n", bufferPosition, length, currentLocalOffset, currentLength, nTodo);
+//
+//        // At this point we found a perfectly balanced section that we wish to expand
+//        for(uint32_t curSize = 2; curSize <= leftLength; curSize<<=1) {
+//            uint32_t b = bufferPosition;
+//            uint32_t bEnd = bufferPosition + curSize;
+//            while(b < bEnd) {
+//                if(REPORT) printf("  -> %u\n", b);
+//                buffer[b] = construct(srcBuffer[b], 0);
+//                b++;
+//            }
+//            bufferPosition <<= 1;
+//        }
+//    }
+    void traverseP2_construct12(uint64_t mapped, uint32_t length, uint32_t currentLocalOffset, uint32_t currentLength, uint32_t*& dest) {
+        memcpy(dest, (uint32_t*)&mapped + currentLocalOffset, currentLength * sizeof(uint32_t));
+        dest += currentLength;
+//        if(currentLength == 2) {
+//            *dest++ = mapped & 0xFFFFFFFFULL;
+//            *dest++ = mapped >> 32;
+//        } else {
+//            *dest++ = currentLocalOffset ? mapped >> 32 : mapped & 0xFFFFFFFFULL;
+//        }
+    }
+    void traverseP2_construct(uint64_t mapped, uint32_t length, uint32_t currentLocalOffset, uint32_t currentLength, uint32_t*& dest) {
+        if(REPORT) printf("traverseP2_construct %zx %u %u %u %p\n", mapped, length, currentLocalOffset, currentLength, dest);
+
+        uint32_t lengthLevel = lengthToLevel(length);
+        uint32_t leftLength = length / 2;
+
+        struct {
+            uint32_t idx;
+            uint32_t length;
+            uint32_t pLength;
+        } todo[lengthLevel];
+        uint32_t nTodos = 0;
+
+        for(;;) {
+            while(currentLength <= leftLength) {
+
+                // Only right part is touched
+                if(leftLength <= currentLocalOffset) {
+                    currentLocalOffset -= leftLength;
+                    if(REPORT) printf("traverseP2_construct: took right %zx %u %u@%u\n", mapped, leftLength, currentLength, currentLocalOffset);
+                    leftLength /= 2;
+                    mapped = construct(mapped >> 32, 0);
+                } else {
+                    int32_t rightPartLength = currentLocalOffset + currentLength - leftLength;
+                    if(rightPartLength > 0) {
+                        if(REPORT) printf("traverseP2_construct: adding todo %zx %u %u@0\n", mapped >> 32, leftLength, rightPartLength);
+                        todo[nTodos++] = {(uint32_t)(mapped >> 32), leftLength, (uint32_t)rightPartLength};
+                        currentLength -= rightPartLength;
+                    }
+                    if(REPORT) printf("traverseP2_construct: took left %zx %u %u@%u\n", mapped, leftLength, currentLength, currentLocalOffset);
+                    leftLength /= 2;
+                    mapped = construct(mapped & 0xFFFFFFFFULL, 0);
+                }
+                if(leftLength == 1) {
+                    memcpy(dest, (uint32_t*)&mapped + currentLocalOffset, currentLength * sizeof(uint32_t));
+                    if(REPORT) printf("traverseP2_construct: COPIED TO %p %zu\n", dest, currentLength * sizeof(uint32_t));
+                    goto todo;
+                }
+            }
+
+            {
+                uint32_t fullLength = 2 * leftLength;
+                uint64_t buffer[fullLength];
+                constructTree(mapped, fullLength, buffer);
+                memcpy(dest, (uint32_t*)buffer + fullLength + currentLocalOffset, currentLength * sizeof(uint32_t));
+                if(REPORT) printf("traverseP2_construct: COPIED TO %p %zu\n", dest, currentLength * sizeof(uint32_t));
+            }
+
+            todo:
+            dest += currentLength;
+            if(nTodos) {
+                nTodos--;
+                currentLocalOffset = 0;
+                currentLength = todo[nTodos].pLength;
+                leftLength = todo[nTodos].length / 2;
+                mapped = construct(todo[nTodos].idx, 0);
+                if(leftLength == 1) {
+                    memcpy(dest, (uint32_t*)&mapped + currentLocalOffset, currentLength * sizeof(uint32_t));
+                    if(REPORT) printf("traverseP2_construct: COPIED TO %p %zu\n", dest, currentLength * sizeof(uint32_t));
+                    goto todo;
+                }
+                if(REPORT) printf("traverseP2_construct: %u todo, %u %u@0\n", nTodos+1, leftLength, currentLength);
+            } else {
+                if(REPORT) printf("traverseP2_construct: all done, dest = %p\n", dest);
+                break;
+            }
+        }
+    }
+
+    __attribute__((always_inline))
+    uint64_t traverseP2_delta12(uint64_t mapped, uint32_t length, uint32_t offset, uint32_t lengthToGo, uint32_t** src) {
+        if(REPORT) {
+            printf("\033[35mtraverseP2_delta12\033[0m %zx %u, off %u, togo %u, src %p\n", mapped, length, offset, lengthToGo, *src);
+        }
+        if(length == 2) {
+            uint32_t idx;
+//            if(pStart + 1 < pEnd) {
+//                mapped = (((uint64_t)src[0]) | (((uint64_t)(src[1])) << 32));
+//                idx = deconstruct(mapped, 0, 2, level == 0);
+//                src += 2;
+//            } else {
+//                if(level < lando.getOffsets() - 1) {
+//                    idx = traverse2(mapped, projection, level+1, &std::remove_pointer<decltype(this)>::type::traverseP2_delta, &std::remove_pointer<decltype(this)>::type::traverseP2_delta12);
+//                    src += 2;
+//                } else {
+                    memcpy(((uint32_t*)&mapped) + offset, *src, lengthToGo * sizeof(uint32_t));
+                    //idx = deconstruct(mapped, 0, 2, level == 0);
+                    *src += lengthToGo;
+                    return mapped;
+//                }
+//            }
+            return idx;
+        } else {
+            return *(*src)++;
+        }
+    }
+
+    uint64_t traverseP2_delta(uint64_t mapped, uint32_t length, uint32_t currentLocalOffset, uint32_t currentLength, uint32_t** src) {
+        if(REPORT) printf("\033[35mtraverseP2_delta\033[0m %zx %u %u %u %p\n", mapped, length, currentLocalOffset, currentLength, *src);
+
+        if(length == 2) {
+            memcpy((uint32_t*)&mapped + currentLocalOffset, *src, currentLength * sizeof(uint32_t));
+            if(REPORT) printf("traverseP2_delta: COPIED FROM %p %zu\n", *src, currentLength * sizeof(uint32_t));
+            *src += currentLength;
+            return mapped;
+        }
+
+        uint32_t lengthLevel = lengthToLevel(length);
+        uint32_t leftLength = length / 2;
+
+        uint64_t chain[lengthLevel+1];
+        bool right[lengthLevel+1];
+
+        uint32_t level = 0;
+
+        chain[0] = mapped;
+
+        uint32_t lengthToGo = currentLength;
+
+        for(;;) {
+            while(currentLength <= leftLength) {
+
+                if(leftLength == 1) {
+                    currentLength = std::min(2-currentLocalOffset, lengthToGo);
+                    memcpy((uint32_t*)&chain[level] + currentLocalOffset, *src, currentLength * sizeof(uint32_t));
+                    if(REPORT) printf("traverseP2_delta: COPIED FROM %p %zu\n", *src, currentLength * sizeof(uint32_t));
+                    lengthToGo -= currentLength;
+                    *src += currentLength;
+                    goto todo;
+                }
+                uint64_t& prevChain = chain[level];
+                level++;
+
+                // Only right part is touched
+                if(leftLength <= currentLocalOffset) {
+                    currentLocalOffset -= leftLength;
+                    if(REPORT) printf("traverseP2_delta: took right %zx %u %u@%u\n", prevChain, leftLength, currentLength, currentLocalOffset);
+                    leftLength /= 2;
+                    chain[level] = construct(prevChain >> 32, 0);
+                    right[level] = 1;
+                } else {
+                    if(REPORT) printf("traverseP2_delta: took left %zx %u %u@%u\n", mapped, leftLength, currentLength, currentLocalOffset);
+                    leftLength /= 2;
+                    chain[level] = construct(prevChain & 0xFFFFFFFFULL, 0);
+                    right[level] = 0;
+                }
+            }
+
+            {
+                uint32_t fullLength = 2 * leftLength;
+                uint64_t buffer[fullLength];
+                constructTree(chain[level], fullLength, buffer);
+                currentLength = std::min(fullLength-currentLocalOffset, lengthToGo);
+                memcpy((uint32_t*)buffer + fullLength + currentLocalOffset, *src, currentLength * sizeof(uint32_t));
+                chain[level] = deconstructTree(fullLength, buffer);
+                if(REPORT) printf("traverseP2_construct: COPIED FROM %p %zu TO %u\n", *src, currentLength * sizeof(uint32_t), currentLocalOffset);
+                lengthToGo -= currentLength;
+                *src += currentLength;
+            }
+
+            todo:
+
+        // a b c d e f g h
+        //  1   2   3   4
+        //    5       6
+        //       (7)
+        //
+        // chain[0] = [5 6]   right[0] = ?
+        // chain[1] = [1 2]   right[1] = 0
+        // chain[2] = [c D]   right[2] = 1
+        // level = 2
+
+            if(REPORT) printf("lengthToGo: %u\n", lengthToGo);
+
+            if(!lengthToGo) {
+                break;
+            }
+
+            while(right[level]) {
+                uint32_t m = deconstruct(chain[level], 0);
+                level--;
+                memcpy(((uint32_t*)&chain[level])+1, &m, sizeof(uint32_t));
+                if(REPORT) printf("%2u: %zx -- %x --> %zx right\n", level, chain[level + 1], m, chain[level]);
+                leftLength *=2;
+            }
+            uint32_t m = deconstruct(chain[level], 0);
+            memcpy(((uint32_t*)&chain[level-1]), &m, sizeof(uint32_t));
+            if(REPORT) printf("%2u: %zx -- %u --> %zx left\n", level, chain[level], m, chain[level - 1]);
+            chain[level] = construct(chain[level-1] >> 32, 0);
+            right[level] = 1;
+            if(REPORT) printf("setup %zx\n", chain[level]);
+            currentLength = lengthToGo;
+            currentLocalOffset = 0;
+        }
+
+        if(REPORT) printf("done, rebuilding chain\n");
+        while(level) {
+            uint32_t m = deconstruct(chain[level], 0);
+            if(REPORT) printf("level %u: %zx -> %x (%u)\n", level, chain[level], m, right[level]);
+            bool r = right[level];
+            level--;
+            memcpy(((uint32_t*)&chain[level])+r, &m, sizeof(uint32_t));
+//            leftLength *=2;
+        }
+        if(REPORT) printf("returning %zx\n", chain[0]);
+        return chain[0];
+        // __xx____
+        // \      /
+        //  \    /
+        //   \  /
+        //    \/
+
+
+
+
+
+//        if(REPORT) printf("traverseP2_delta %zx %u %u %u %u %p\n", mapped, length, level, pStart, pEnd, src);
+//        uint32_t lengthLevel = lengthToLevel(length);
+//        uint32_t leftLength = length / 2;
+//
+//        struct {
+//            uint32_t idx;
+//            uint32_t subLevel;
+//            uint32_t pLength;
+//        } todo[lengthLevel];
+//        uint32_t nTodos = 0;
+//
+//        uint64_t chain[lengthLevel];
+//        uint64_t left[lengthLevel];
+//        uint32_t currentLevel = 1;
+//        chain[0] = mapped;
+//
+//        //       _
+//        // a b c d e f g h
+//        //  1   2   3   4
+//        //    5       6
+//        //       (7)
+//        //
+//        // mappedOriginal = [5 6]
+//        //
+//        // chain[0] = [5 6]   left[0] = ?
+//        // chain[1] = [1 2]   left[1] = 1
+//        // chain[2] = [c D]   left[2] = 0
+//        //
+//
+//        for(;;) {
+//            while(currentLength <= leftLength) {
+//
+//                // Only right part is touched
+//                if(leftLength <= currentLocalOffset) {
+//                    currentLocalOffset -= leftLength;
+//                    if(REPORT) printf("traverseP2_delta: took right %zx %u %u@%u\n", mapped, leftLength, currentLength, currentLocalOffset);
+//                    leftLength /= 2;
+//                    chain[currentLevel] = construct(chain[currentLevel-1] >> 32, 0);
+//                    left[currentLevel] = 0;
+//                } else {
+//                    int32_t rightPartLength = currentLocalOffset + currentLength - leftLength;
+//                    if(rightPartLength > 0) {
+//                        if(REPORT) printf("traverseP2_delta: adding todo %zx %u %u@0\n", mapped >> 32, leftLength, rightPartLength);
+//                        todo[nTodos++] = {mapped >> 32, currentLevel, rightPartLength};
+//                        currentLength -= rightPartLength;
+//                    }
+//                    if(REPORT) printf("traverseP2_delta: took left %zx %u %u@%u\n", mapped, leftLength, currentLength, currentLocalOffset);
+//                    leftLength /= 2;
+//                    chain[currentLevel] = construct(chain[currentLevel-1] & 0xFFFFFFFFULL, 0);
+//                    left[currentLevel] = 1;
+//                }
+//                if(leftLength == 1) {
+//                    memcpy((uint32_t*)&chain[currentLevel] + currentLocalOffset, src, currentLength * sizeof(uint32_t));
+//                    if(REPORT) printf("traverseP2_delta: COPIED FROM %p %u\n", src, currentLength * sizeof(uint32_t));
+//                    goto backtrackChain;
+//                }
+//                currentLevel++;
+//            }
+//
+//            {
+//                uint32_t fullLength = 2 * leftLength;
+//                uint64_t buffer[fullLength];
+//                constructTree(mapped, fullLength, (uint32_t*)buffer);
+//                memcpy((uint32_t*)buffer + fullLength + currentLocalOffset, src, currentLength * sizeof(uint32_t));
+//                chain[currentLevel] = deconstructTree(fullLength, (uint32_t*)buffer);
+//                if(REPORT) printf("traverseP2_delta: COPIED FROM %p %u\n", src, currentLength * sizeof(uint32_t));
+//            }
+//
+//            backtrackChain:
+//
+//            src += currentLength;
+//            if(nTodos) {
+//                uint32_t todoLevel = todo[nTodos].subLevel;
+//                // chain[0..currentLevel] contain the chain of old nodes
+//                // chain[currentLevel] contains the deepest, new node
+//                for(;todoLevel < currentLevel;currentLevel--) {
+//                    uint32_t m = deconstruct(chain[currentLevel], 0);
+//                    memcpy((uint32_t*)chain[currentLevel-1] + left[currentLevel], &m, sizeof(uint32_t));
+//                }
+//                nTodos--;
+//                currentLocalOffset = 0;
+//                currentLength = todo[nTodos].pLength;
+//                leftLength = (length >> todoLevel) / 2;
+//                currentLevel++;
+//                chain[currentLevel] = construct(todo[nTodos].idx, 0);
+//                left[currentLevel] = 0;
+//                if(leftLength == 1) {
+//                    memcpy((uint32_t*)&chain[currentLevel] + currentLocalOffset, src, currentLength * sizeof(uint32_t));
+//                    if(REPORT) printf("traverseP2_delta: COPIED FROM %p %u\n", src, currentLength * sizeof(uint32_t));
+//                    goto backtrackChain;
+//                }
+//                if(REPORT) printf("traverseP2_delta: %u todo, %zx %u %u@0\n", nTodos+1, leftLength, currentLength);
+//            } else {
+//                if(REPORT) printf("traverseP2_delta: all done\n");
+//
+//                // chain[0..currentLevel] contain the chain of old nodes
+//                // chain[currentLevel] contains the deepest, new node
+//                for(;currentLevel;currentLevel--) {
+//                    uint32_t m = deconstruct(chain[currentLevel], 0);
+//                    memcpy((uint32_t*)chain[currentLevel-1] + left[currentLevel], &m, sizeof(uint32_t));
+//                }
+//                return chain[0];
+//            }
+//        }
+    }
+
+    uint64_t deltaMapped2(uint64_t mapped, uint32_t length, uint32_t currentLocalOffset, uint32_t currentLength, uint32_t* src) {
+        if(REPORT) printf("\033[35mdeltaMapped2\033[0m %zx %u %u %u %p\n", mapped, length, currentLocalOffset, currentLength, src);
+
+        if(length == 2) {
+            memcpy((uint32_t*)&mapped + currentLocalOffset, src, currentLength * sizeof(uint32_t));
+            if(REPORT) printf("deltaMapped2: COPIED FROM %p %zu\n", src, currentLength * sizeof(uint32_t));
+            src += currentLength;
+            return mapped;
+        }
+
+        uint32_t lengthLevel = lengthToLevel(length);
+        uint32_t leftLength = 1 << lengthLevel;
+        uint32_t rightLength = length - leftLength;
+
+        uint64_t chain[lengthLevel+2];
+        bool right[lengthLevel+2];
+        uint32_t lengths[leftLength+2];
+
+        uint32_t level = 0;
+
+        chain[0] = mapped;
+
+        uint32_t lengthToGo = currentLength;
+
+        for(;;) {
+            while(currentLength <= leftLength) {
+
+                if(leftLength == 1) {
+                    currentLength = std::min(2-currentLocalOffset, lengthToGo);
+                    memcpy((uint32_t*)&chain[level] + currentLocalOffset, src, currentLength * sizeof(uint32_t));
+                    if(REPORT) printf("deltaMapped2: COPIED FROM %p %zu\n", src, currentLength * sizeof(uint32_t));
+                    lengthToGo -= currentLength;
+                    src += currentLength;
+                    goto todo;
+                }
+                uint64_t& prevChain = chain[level];
+                level++;
+
+                // Only right part is touched
+                if(leftLength <= currentLocalOffset) {
+                    currentLocalOffset -= leftLength;
+                    if(REPORT) printf("deltaMapped2: took right %zx %u %u@%u\n", prevChain, leftLength, currentLength, currentLocalOffset);
+                    lengths[level] = rightLength;
+                    leftLength = 1 << lengthToLevel(rightLength);
+                    rightLength -= leftLength;
+                    chain[level] = construct(prevChain >> 32, 0);
+                    right[level] = 1;
+                } else {
+                    if(REPORT) printf("deltaMapped2: took left %zx %u %u@%u\n", mapped, leftLength, currentLength, currentLocalOffset);
+                    lengths[level] = leftLength;
+                    leftLength /= 2;
+                    rightLength = leftLength;
+                    chain[level] = construct(prevChain & 0xFFFFFFFFULL, 0);
+                    right[level] = 0;
+                }
+            }
+
+            {
+                uint32_t fullLength = leftLength + rightLength;
+                uint64_t buffer[fullLength];
+                constructTree(chain[level], fullLength, buffer);
+                currentLength = std::min(fullLength-currentLocalOffset, lengthToGo);
+                memcpy((uint32_t*)buffer + fullLength + currentLocalOffset, src, currentLength * sizeof(uint32_t));
+                chain[level] = deconstructTree(fullLength, buffer);
+                if(REPORT) printf("deltaMapped2: COPIED FROM %p %zu\n", src, currentLength * sizeof(uint32_t));
+                lengthToGo -= currentLength;
+                src += currentLength;
+            }
+
+            todo:
+
+            // a b c d e f g h
+            //  1   2   3   4
+            //    5       6
+            //       (7)
+            //
+            // chain[0] = [5 6]   right[0] = ?
+            // chain[1] = [1 2]   right[1] = 0
+            // chain[2] = [c D]   right[2] = 1
+            // level = 2
+
+            if(REPORT) printf("lengthToGo: %u\n", lengthToGo);
+
+            if(!lengthToGo) {
+                break;
+            }
+
+            while(right[level]) {
+                uint32_t m = deconstruct(chain[level], 0);
+                level--;
+                memcpy(((uint32_t*)&chain[level])+1, &m, sizeof(uint32_t));
+                if(REPORT) printf("%2u: %zx -- %x --> %zx right\n", level, chain[level + 1], m, chain[level]);
+            }
+            leftLength = 1 << lengthToLevel(lengths[level]);
+            rightLength = lengths[level] - leftLength;
+            uint32_t m = deconstruct(chain[level], 0);
+            memcpy(((uint32_t*)&chain[level-1]), &m, sizeof(uint32_t));
+            if(REPORT) printf("%2u: %zx -- %u --> %zx left\n", level, chain[level], m, chain[level - 1]);
+            chain[level] = construct(chain[level-1] >> 32, 0);
+            right[level] = 1;
+            if(REPORT) printf("setup %zx\n", chain[level]);
+            currentLength = lengthToGo;
+            currentLocalOffset = 0;
+        }
+
+        if(REPORT) printf("done, rebuilding chain\n");
+        while(level) {
+            uint32_t m = deconstruct(chain[level], 0);
+            if(REPORT) printf("level %u: %zx -> %x (%u)\n", level, chain[level], m, right[level]);
+            bool r = right[level];
+            level--;
+            memcpy(((uint32_t*)&chain[level])+r, &m, sizeof(uint32_t));
+        }
+        if(REPORT) printf("returning %zx\n", chain[0]);
+        return chain[0];
+    }
+
+    /**
+     * Traverses the tree, calling @c tb on parts that are balanced and @c ts for parts of lengths 1 and 2
+     * @param mapped
+     * @param length
+     * @param currentLocalOffset
+     * @param currentLength
+     * @param dest
+     */
+    template<typename TRAVERSE_BALANCED, typename TRAVERSE_SINGLE, typename... ARGS>
+    __attribute__((always_inline))
+    void traverse2(uint64_t mapped, uint32_t length, uint32_t currentLocalOffset, int32_t currentLength, TRAVERSE_BALANCED&& tb, TRAVERSE_SINGLE&& ts, ARGS... tbArgs) {
+
+        if(REPORT) printf("traverse2 %zx %u %u %u\n", mapped, length, currentLocalOffset, currentLength);
+
+        if(length <= 2) {
+            (this->*ts)(mapped, length, currentLocalOffset, currentLength, tbArgs...);
+            return;
+        }
+
+        uint32_t lengthLevel = lengthToLevel(length);
+        uint32_t leftLength = 1 << lengthLevel;
+        uint32_t rightLength = length - leftLength;
+
+        // \   16   /\   8  /\  4 /\ 2/
+        //  \      /  \    /  \  /  \/
+        //   \    /    \  /    \/ />[ 1]
+        //    \  /      \/ /-->[  ]
+        //     \/ /---->[  ]
+        //     [  ]
+        //
+        // \   16   /\ 2/
+        //  \      /  \/
+        //   \    / __/
+        //    \  / /
+        //     \/ /
+        //     [  ]
+        //
+
+        for(; leftLength > rightLength; mapped = construct(mapped, 0)) {
+
+            // If part of the projection is in the left part of the tree
+            int32_t touchedLengthInLeft = leftLength - currentLocalOffset;
+            if(touchedLengthInLeft > 0) {
+                touchedLengthInLeft = std::min(touchedLengthInLeft, currentLength);
+                (this->*tb)(construct(mapped & 0xFFFFFFFFULL, 0), leftLength, currentLocalOffset, touchedLengthInLeft, tbArgs...);
+                currentLength -= touchedLengthInLeft;
+                if(currentLength <= 0) return;
+                currentLocalOffset = 0;
+            } else {
+                currentLocalOffset -= leftLength;
+            }
+            mapped >>= 32;
+            if(rightLength <= 3) {
+                if(rightLength >= 2) {
+                    mapped = construct(mapped, 0);
+                    if(rightLength == 3) {
+                        // If part of the projection is in the left part of the tree
+                        int32_t touchedLengthInLeft = 2 - currentLocalOffset;
+                        if(touchedLengthInLeft > 0) {
+                            touchedLengthInLeft = std::min(touchedLengthInLeft, currentLength);
+                            (this->*ts)(construct(mapped & 0xFFFFFFFFULL, 0), 2, currentLocalOffset, touchedLengthInLeft, tbArgs...);
+                            currentLength -= touchedLengthInLeft;
+                            if(currentLength <= 0) return;
+                            currentLocalOffset = 0;
+                        } else {
+                            currentLocalOffset -= 2;
+                        }
+                        mapped >>= 32;
+                        rightLength -= 2;
+                    }
+                }
+                (this->*ts)(mapped, rightLength, currentLocalOffset, currentLength, tbArgs...);
+                return;
+            }
+            leftLength = 1 << lengthToLevel(rightLength);
+            rightLength -= leftLength;
+        }
+        (this->*tb)(mapped, leftLength + rightLength, currentLocalOffset, currentLength, tbArgs...);
+    }
+
+    /**
+     * Traverses the tree, calling traverseP2_construct on parts that are balanced
+     * @param mapped
+     * @param length
+     * @param currentLocalOffset
+     * @param currentLength
+     * @param dest
+     */
+//    template<typename TRAVERSE_BALANCED, typename TRAVERSE_SINGLE, typename... ARGS>
+//    __attribute__((always_inline))
+//    uint32_t traverse2(Index idx, MultiProjection& projection, uint32_t level, TRAVERSE_BALANCED&& tb, TRAVERSE_SINGLE&& ts, ARGS... tbArgs) {
+//        uint64_t idxWithoutLength = idx.getID();
+//        uint64_t length = idx.getLength();
+//        uint64_t mapped = construct(idxWithoutLength, 0, length, level == 0);
+//
+//        if(REPORT) printf("traverse2 %zx %u\n", mapped, length);
+//        uint32_t projections = projection.getProjections();
+//
+//        if(length <= 2) {
+//            return (this->*ts)(mapped, length, projection, level, 0, projections, tbArgs...);
+//        }
+//
+//        uint32_t lengthLevel = lengthToLevel(length);
+//        uint32_t leftLength = 1 << lengthLevel;
+//        uint32_t rightLength = length - leftLength;
+//
+//        // \   16   /\   8  /\  4 /\ 2/
+//        //  \      /  \    /  \  /  \/
+//        //   \    /    \  /    \/ />[ 1]
+//        //    \  /      \/ /-->[  ]
+//        //     \/ /---->[  ]
+//        //     [  ]
+//        //
+//        // \   16   /\   8  /
+//        //  \      /  \    /
+//        //   \    /    \  /
+//        //    \  /      \/
+//        //     \/ /-----/
+//        //     [  ]
+//        //
+//        // \   16   /\ 2/
+//        //  \      /  \/
+//        //   \    / __/
+//        //    \  / /
+//        //     \/ /
+//        //     [  ]
+//        //
+//
+//        uint32_t currentLocalOffset = 0;
+//        uint32_t currentProjection = 0;
+//        uint32_t currentProjectionEnd = 0;
+//
+//        uint32_t chain[lengthLevel];
+//        uint32_t chainIdx = 0;
+//
+//        for(; leftLength > rightLength; mapped = construct(mapped, 0)) {
+//
+//            // We will now determine what series of projections we will pass on
+//            // and remember it as [currentProjection, currentProjectionEnd)
+//
+//            // Remember the offset of the last projection in the upcoming series of projections we pass on
+//            uint32_t projectionOffset;
+//            while(currentProjectionEnd < projections && (projectionOffset = projection.getProjection(currentProjectionEnd).getOffset(level)) < currentLocalOffset + leftLength) currentProjectionEnd++;
+//
+//            // If there are any projections to pass on, pass them on and determine if the last projection
+//            // overlaps with the next power-of-two link
+//            if(currentProjection < currentProjectionEnd) {
+//                chain[chainIdx++] = (this->*tb)(construct(mapped & 0xFFFFFFFFULL, 0), leftLength, projection, level, currentProjection, currentProjectionEnd, tbArgs...);
+//                if(projectionOffset + projection.getProjection(currentProjectionEnd-1).getLength(level) > currentLocalOffset + leftLength) currentProjectionEnd--;
+//            }
+//
+//            // If there are no more projections to pass on, we are done
+//            if(currentProjectionEnd >= projections) return;
+//
+//            // Prepare for next series
+//            currentProjection = currentProjectionEnd;
+//            mapped >>= 32;
+//
+//            // If we reach the end of the power-of-two-chain, handle that specifically
+//            if(rightLength <= 3) {
+//                if(rightLength >= 2) {
+//                    mapped = construct(mapped, 0);
+//                    if(rightLength == 3) {
+//                        while(currentProjectionEnd < projections && projection.getProjection(currentProjectionEnd).getOffset(level) < currentLocalOffset + leftLength) currentProjectionEnd++;
+//
+//                        // If part of the projection is in the left part of the tree
+//                        if(currentProjection < currentProjectionEnd) {
+//                            chain[chainIdx++] = (this->*ts)(construct(mapped & 0xFFFFFFFFULL, 0), 2, projection, level, currentProjection, currentProjectionEnd, tbArgs...);
+//                        }
+//                        mapped >>= 32;
+//                        rightLength -= 2;
+//                    }
+//                }
+//                if(currentProjectionEnd < projections) {
+//                    chain[chainIdx++] = (this->*ts)(mapped, rightLength, projection, level, currentProjectionEnd, projections, tbArgs...);
+//                }
+//                goto processChain;
+//            }
+//
+//            // Prepare for the next power-of-two link
+//            leftLength = 1 << lengthToLevel(rightLength);
+//            rightLength -= leftLength;
+//        }
+//        chain[chainIdx++] = (this->*tb)(mapped, leftLength + rightLength, projection, level, currentProjection, currentProjectionEnd, tbArgs...);
+//        processChain:
+//        --chainIdx;
+//        for(;--chainIdx;) {
+//            // Combine chain[chainIdx-1] and chain[chainIdx]
+//            chain[chainIdx] = deconstruct(((uint64_t)chain[chainIdx]) | (((uint64_t)chain[chainIdx+1]) << 32), 0);
+//        }
+//        return deconstruct(((uint64_t)chain[0]) | (((uint64_t)chain[1]) << 32), 0, 2, level == 0);
+//    }
+
+    template<typename TRAVERSE_BALANCED, typename TRAVERSE_SINGLE, typename... ARGS>
+    __attribute__((always_inline))
+    void traverse3_gotoJump(MultiProjection& projection, uint32_t pStart, uint32_t pEnd, uint32_t level, uint32_t originalLevel, uint32_t currentLocalOffset, uint32_t currentOffset, uint32_t nextOffset, uint32_t leftLength, uint64_t* chain, bool* right, TRAVERSE_BALANCED&& tb, TRAVERSE_SINGLE&& ts, ARGS... tbArgs) {
+        if(REPORT) printf("traverse3_gotoJump: lvl %u, %zx %u@%u\n", originalLevel, chain[originalLevel], leftLength, currentLocalOffset);
+
+        uint32_t currentLevel = originalLevel;
+        while(2 <= leftLength) {
+
+            uint64_t& prevChain = chain[currentLevel];
+            currentLevel++;
+
+            // Only right part is touched
+            if(leftLength <= currentLocalOffset) {
+                currentLocalOffset -= leftLength;
+                if(REPORT) printf("traverse3_gotoJump: took right %zx %u@%u\n", prevChain, leftLength, currentLocalOffset);
+                leftLength /= 2;
+                chain[currentLevel] = construct(prevChain >> 32, 0);
+                right[currentLevel] = 1;
+            } else {
+                if(REPORT) printf("traverse3_gotoJump: took left %zx %u@%u\n", prevChain, leftLength, currentLocalOffset);
+                leftLength /= 2;
+                chain[currentLevel] = construct(prevChain & 0xFFFFFFFFULL, 0);
+                right[currentLevel] = 0;
+            }
+        }
+        IndexInserted newIdx = traverse3(chain[currentLevel], false, projection, pStart, pEnd, level+1, tb, ts, tbArgs...);
+        chain[currentLevel] = newIdx.getState().getData();
+        while(originalLevel < currentLevel) {
+            uint32_t m = deconstruct(chain[currentLevel], 0);
+            if(REPORT) printf("level %u: %zx -> %x (%u)\n", currentLevel, chain[currentLevel], m, right[currentLevel]);
+            bool r = right[currentLevel];
+            currentLevel--;
+            memcpy(((uint32_t*)&chain[currentLevel])+r, &m, sizeof(uint32_t));
+            leftLength *=2;
+        }
+        if(REPORT) printf("traverse3_gotoJump: jump done, got index %zx at level %u\n", chain[originalLevel], currentLevel);
+    }
+
+    /**
+     * Traverses the tree, calling traverseP2_construct on parts that are balanced
+     * @param mapped
+     * @param length
+     * @param currentLocalOffset
+     * @param currentLength
+     * @param dest
+     */
+    template<typename TRAVERSE_BALANCED, typename TRAVERSE_SINGLE, typename... ARGS>
+    inline
+    IndexInserted traverse3(Index idx, bool isRoot, MultiProjection& projection, uint32_t pStart, uint32_t pEnd, uint32_t level, TRAVERSE_BALANCED&& tb, TRAVERSE_SINGLE&& ts, ARGS... tbArgs) {
+        uint64_t idxWithoutLength = idx.getID();
+        uint64_t length = idx.getLength();
+        uint64_t mapped = construct(idxWithoutLength, 0, length, isRoot && level == 0);
+        if(REPORT) {
+            for(uint32_t l=level;l--;) printf("  ");
+            printf("\033[36mtraverse3\033[0m %zx %u %u %u %u\n", idxWithoutLength, (uint32_t)length, pStart, pEnd, level);
+            for(uint32_t p = pStart; p < pEnd; ++p) {
+                auto& proj = projection.getProjection(p);
+                auto lando = proj.getLengthAndOffsets();
+
+                printf("  - %u at", lando.getLength());
+                for(uint32_t o = 0; o < lando.getOffsets(); ++o) {
+                    printf(" %u (%u)", proj.getOffset(o).getOffset(), (uint32_t)proj.getOffset(o).getOptions());
+                }
+                printf("\n");
+            }
+        }
+        uint32_t lengthLevel = lengthToLevel(length);
+        uint32_t leftLength = 1 << lengthLevel;
+        uint32_t rightLength = length - leftLength;
+
+        uint64_t chain[lengthLevel+2];
+        bool right[lengthLevel+2];
+        uint32_t lengths[leftLength+2];
+        uint32_t currentLevel = 0;
+        chain[0] = mapped;
+        lengths[0] = length;
+
+        //       _
+        // a b c d e f g h
+        //  1   2   3   4
+        //    5       6
+        //       (7)
+        //
+        // mappedOriginal = [5 6]
+        //
+        // chain[0] = [5 6]   left[0] = ?
+        // chain[1] = [1 2]   left[1] = 1
+        // chain[2] = [c D]   left[2] = 0
+        //
+
+        uint32_t currentProjection = pStart;
+        uint32_t currentOffset = projection.getProjection(currentProjection).getOffset(level).getOffset();
+        uint32_t currentLength = projection.getProjection(currentProjection).getLength(level);
+        uint32_t nextOffset;
+        uint32_t nextLength;
+        if(currentProjection + 1 < pEnd) {
+            nextOffset = projection.getProjection(currentProjection + 1).getOffset(level).getOffset();
+            nextLength = projection.getProjection(currentProjection + 1).getLength(level);
+        } else {
+            nextOffset = length;
+            nextLength = 0;
+        }
+
+        uint32_t lengthToGo = currentLength;
+        uint32_t globalOffset = 0;
+
+        /// TODO...
+
+        while(currentProjection < pEnd) {
+
+//            uint32_t currentOffset = nextOffset;
+//            uint32_t currentLength = nextLength;
+//            if(currentProjection + 1 < pEnd) {
+//                nextOffset = projection.getProjection(currentProjection+1).getOffset(level).getOffset();
+//                nextLength = projection.getProjection(currentProjection+1).getLength(level);
+//            } else {
+//                nextOffset = length;
+//            }
+
+            while(true) {
+
+                currentLevel++;
+                if(REPORT) {
+                    for(uint32_t l=level;l--;) printf("  ");
+                    printf("- lvl %u (%u+%u), proj %u, off %u (%u), noff %u (%u), gloff %u, chain[currentLevel-1] = %zx\n", currentLevel, leftLength, rightLength, currentProjection, currentOffset, currentLength, nextOffset, nextLength, globalOffset, chain[currentLevel-1]);
+                }
+
+                uint32_t currentLocalOffset = currentOffset - globalOffset;
+                uint32_t nextLocalOffset = nextOffset - globalOffset;
+
+                // Only right part is touched
+                if(leftLength <= currentLocalOffset) {
+                    if(false) {
+                        uint64_t right = (this->*tb)(construct(chain[currentLevel-1] >> 32, 0), leftLength, currentLocalOffset, lengthToGo, tbArgs...);
+                        right = deconstruct(right, 0);
+                        right <<= 32;
+                        chain[currentLevel-1] = right | (chain[currentLevel-1] & 0xFFFFFFFFULL);
+                        lengthToGo = 0;
+                    } else {
+                        if(rightLength == 1) {
+                            currentLevel--;
+                            uint64_t right = (this->*ts)(chain[currentLevel] >> 32, 1, 0, 1, tbArgs...);
+                            right <<= 32;
+                            chain[currentLevel] = right | (chain[currentLevel] & 0xFFFFFFFFULL);
+                            lengthToGo = 0;
+                            currentProjection++;
+                            break;
+                        }
+                        currentLocalOffset -= leftLength;
+                        globalOffset += leftLength;
+                        lengths[currentLevel] = rightLength;
+                        leftLength = 1 << lengthToLevel(rightLength);
+                        rightLength -= leftLength;
+                        chain[currentLevel] = construct(chain[currentLevel - 1] >> 32, 0);
+                        right[currentLevel] = 1;
+                        if(REPORT) {
+                            for(uint32_t l = level; l--;) printf("  ");
+                            printf("  only right part touched %8zx -> %16zx\n", chain[currentLevel - 1] >> 32, chain[currentLevel]);
+                        }
+                    }
+                }
+
+                // The left part is only touched by currentProjection
+                else if(leftLength <= nextLocalOffset) {
+
+
+                    // <-------> leftLength
+                    //
+                    //  \      / \      /
+                    //   \    /   \    /
+                    //    \  /     \  /
+                    //     \/       \/
+                    //      \       /
+                    //       \     /
+                    //     [    |    ]    chain[currentLevel-1]
+                    //          |
+                    //     [    |    ]    chain[currentLevel-2], might not exist
+
+                    // If the next offset doesn't touch the right part
+                    uint32_t touchedHere = leftLength * 2;
+                    if(touchedHere <= nextLocalOffset) {
+                        if(REPORT) {
+                            for(uint32_t l=level;l--;) printf("  ");
+                            if(REPORT) printf("  whole further tree only touched by currentProjection %u\n", currentProjection);
+                        }
+                        assert(leftLength == rightLength && "ok, this is not correct after all");
+                        currentLevel--;
+                        if(level < projection.getProjection(currentProjection).getLengthAndOffsets().getOffsets() - 1) {
+                            uint32_t currentProjectionEnd = currentProjection + 1;
+                            if(currentOffset == nextOffset) {
+                                while(currentProjectionEnd < pEnd && ((nextOffset = projection.getProjection(currentProjectionEnd).getOffset(level).getOffset())) == currentOffset) {
+                                    if(REPORT) printf("traverse3_gotoJump: determined projection %u is in the same jump\n", currentProjectionEnd);
+                                    currentProjectionEnd++;
+                                }
+                            }
+                            lengths[currentLevel] = touchedHere;
+//                            printf("BEFOR traverse3_gotoJump:\n");
+//                            printf("      currentLevel          = %u:\n", currentLevel);
+//                            printf("      chain[currentLevel]   = %zx:\n", chain[currentLevel]);
+//                            printf("      lengths[currentLevel] = %u:\n", lengths[currentLevel]);
+//                            printf("      leftLength            = %u:\n", leftLength);
+//                            printf("      rightLength           = %u:\n", rightLength);
+//                            printf("      currentProjection     = %u:\n", currentProjection);
+//                            printf("      currentOffset         = %u:\n", currentOffset);
+//                            printf("      currentLength         = %u:\n", currentLength);
+//                            printf("      nextOffset            = %u:\n", nextOffset);
+//                            printf("      nextLength            = %u:\n", nextLength);
+                            traverse3_gotoJump(projection, currentProjection, currentProjectionEnd, level, currentLevel, currentLocalOffset, currentOffset, nextOffset, leftLength, chain, right, tb, ts, tbArgs...);
+//                            printf("AFTER traverse3_gotoJump:\n");
+//                            printf("      chain[currentLevel]   = %zx:\n", chain[currentLevel]);
+//                            printf("      lengths[currentLevel] = %u:\n", lengths[currentLevel]);
+//                            printf("      leftLength            = %u:\n", leftLength);
+//                            printf("      rightLength           = %u:\n", rightLength);
+//                            printf("      currentProjection     = %u:\n", currentProjection);
+//                            printf("      currentOffset         = %u:\n", currentOffset);
+//                            printf("      currentLength         = %u:\n", currentLength);
+//                            printf("      nextOffset            = %u:\n", nextOffset);
+//                            printf("      nextLength            = %u:\n", nextLength);
+                            currentProjection = currentProjectionEnd;
+                            if(currentProjection >= pEnd) {
+                                if(REPORT) {
+                                    for(uint32_t l=level;l--;) printf("  ");
+                                    printf("  no more projections %u\n", __LINE__);
+                                }
+                                currentOffset = length;
+                                break;
+                            }
+                            currentOffset = nextOffset;
+                            currentLength = projection.getProjection(currentProjection).getLength(level);
+                            lengthToGo = currentLength;
+                            if(currentProjection + 1 < pEnd) {
+                                nextOffset = projection.getProjection(currentProjection + 1).getOffset(level).getOffset();
+                                nextLength = projection.getProjection(currentProjection + 1).getLength(level);
+                            } else {
+                                nextOffset = length;
+                            }
+                            break;
+//                            if(currentProjection >= pEnd) {
+//                                if(REPORT) {
+//                                    for(uint32_t l=level;l--;) printf("  ");
+//                                    printf("  no more projections %u\n", __LINE__);
+//                                }
+//                                currentOffset = length;
+//                                break;
+//                            }
+                        } else {
+                            touchedHere = std::min(touchedHere - currentLocalOffset, lengthToGo);
+                            chain[currentLevel] = (this->*tb)(chain[currentLevel], leftLength*2, currentLocalOffset, touchedHere, tbArgs...);
+                        }
+                        lengthToGo -= touchedHere;
+                        if(lengthToGo) {
+                            currentOffset += touchedHere;
+                            currentLength -= touchedHere;
+                            if(REPORT) printf("  projection not done yet, remaining %u, offset %u\n", lengthToGo, currentOffset);
+                        } else {
+                            currentProjection++;
+                            currentOffset = nextOffset;
+                            currentLength = nextLength;
+                            lengthToGo = currentLength;
+                            if(currentProjection + 1 < pEnd) {
+                                nextOffset = projection.getProjection(currentProjection + 1).getOffset(level).getOffset();
+                                nextLength = projection.getProjection(currentProjection + 1).getLength(level);
+                                if(REPORT) printf("  projection %u done, setup current %u %u@%u and next %u@%u\n", currentProjection-1, currentProjection, currentLength, currentOffset, nextLength, nextOffset);
+                            } else {
+                                nextOffset = length;
+                                if(REPORT) printf("  projection %u done, setup current %u %u@%u and next to finish\n", currentProjection-1, currentProjection, currentLength, currentOffset);
+                            }
+                        }
+                        break;
+                    } else {
+                        if(REPORT) {
+                            for(uint32_t l=level;l--;) printf("  ");
+                            printf("  left part only touched by currentProjection %u, noff %u\n", currentProjection, nextOffset);
+                        }
+                        if(level < projection.getProjection(currentProjection).getLengthAndOffsets().getOffsets() - 1) {
+                            chain[currentLevel] = construct(chain[currentLevel-1] & 0xFFFFFFFFULL, 0);
+                            lengths[currentLevel] = leftLength;
+                            uint32_t currentProjectionEnd = currentProjection + 1;
+                            if(currentOffset == nextOffset) {
+                                while(currentProjectionEnd < pEnd && ((nextOffset = projection.getProjection(currentProjectionEnd).getOffset(level).getOffset())) == currentOffset) {
+                                    if(REPORT) printf("traverse3_gotoJump: determined projection %u is in the same jump\n", currentProjectionEnd);
+                                    currentProjectionEnd++;
+                                }
+                            }
+                            traverse3_gotoJump(projection, currentProjection, currentProjectionEnd, level, currentLevel, currentLocalOffset, currentOffset, nextOffset, leftLength/2, chain, right, tb, ts, tbArgs...);
+//                            printf("AFTER traverse3_gotoJump:\n");
+//                            printf("      currentLevel          = %u:\n", currentLevel);
+//                            printf("      chain[currentLevel]   = %zx:\n", chain[currentLevel]);
+//                            printf("      lengths[currentLevel] = %u:\n", lengths[currentLevel]);
+//                            printf("      leftLength            = %u:\n", leftLength);
+//                            printf("      rightLength           = %u:\n", rightLength);
+//                            printf("      currentProjection     = %u:\n", currentProjection);
+//                            printf("      currentOffset         = %u:\n", currentOffset);
+//                            printf("      currentLength         = %u:\n", currentLength);
+//                            printf("      nextOffset            = %u:\n", nextOffset);
+//                            printf("      nextLength            = %u:\n", nextLength);
+                            uint32_t left = (uint32_t)deconstruct(chain[currentLevel], 0);
+                            currentLevel--;
+                            chain[currentLevel] = ((uint64_t)left) | (chain[currentLevel] & 0xFFFFFFFF00000000ULL);
+                            currentProjection = currentProjectionEnd;
+                            if(currentProjection >= pEnd) {
+                                if(REPORT) {
+                                    for(uint32_t l=level;l--;) printf("  ");
+                                    printf("  no more projections %u\n", __LINE__);
+                                }
+                                currentOffset = length;
+                                break;
+                            }
+                            currentOffset = nextOffset;
+                            currentLength = projection.getProjection(currentProjection).getLength(level);
+                            lengthToGo = currentLength;
+                            if(currentProjection + 1 < pEnd) {
+                                nextOffset = projection.getProjection(currentProjection + 1).getOffset(level).getOffset();
+                                nextLength = projection.getProjection(currentProjection + 1).getLength(level);
+                            } else {
+                                nextOffset = length;
+                            }
+                            break;
+                        } else {
+                            touchedHere = std::min(leftLength - currentLocalOffset, lengthToGo);
+                            uint64_t left = (this->*tb)(construct(chain[currentLevel-1] & 0xFFFFFFFFULL, 0), leftLength, currentLocalOffset, touchedHere, tbArgs...);
+                            left = deconstruct(left, 0) & 0xFFFFFFFFULL;
+                            chain[currentLevel-1] = left | (chain[currentLevel-1] & 0xFFFFFFFF00000000ULL);
+                            lengthToGo -= touchedHere;
+                            if(lengthToGo) {
+                                currentOffset += touchedHere;
+                                currentLength -= touchedHere;
+                                if(REPORT) printf("  projection not done yet, remaining %u, offset %u\n", lengthToGo, currentOffset);
+                            } else {
+                                currentLevel--;
+                                currentProjection++;
+                                currentOffset = nextOffset;
+                                currentLength = nextLength;
+                                lengthToGo = currentLength;
+                                if(currentProjection + 1 < pEnd) {
+                                    nextOffset = projection.getProjection(currentProjection + 1).getOffset(level).getOffset();
+                                    nextLength = projection.getProjection(currentProjection + 1).getLength(level);
+                                    if(REPORT) printf("  projection %u done, setup current %u %u@%u and next %u@%u\n", currentProjection-1, currentProjection, currentLength, currentOffset, nextLength, nextOffset);
+                                } else {
+                                    nextOffset = length;
+                                    if(REPORT) printf("  setup current %u %u@%u and next to finish\n", currentProjection-1, currentLength, currentOffset);
+                                }
+                                break;
+                            }
+                        }
+                        if(rightLength == 1) {
+                            currentLevel--;
+                            uint64_t right = (this->*ts)(chain[currentLevel] >> 32, 1, 0, 1, tbArgs...);
+                            right <<= 32;
+                            chain[currentLevel] = right | (chain[currentLevel] & 0xFFFFFFFFULL);
+                            lengthToGo = 0;
+                            currentProjection++;
+                            break;
+                        }
+                        globalOffset += leftLength;
+                        currentLocalOffset = currentOffset - globalOffset;
+                        lengths[currentLevel] = rightLength;
+                        leftLength = 1 << lengthToLevel(rightLength);
+                        rightLength -= leftLength;
+                        chain[currentLevel] = construct(chain[currentLevel-1] >> 32, 0);
+                        right[currentLevel] = 1;
+                    }
+                }
+
+                // The left part is touched by currentProjection and at least one more
+                else {
+                    if(REPORT) {
+                        for(uint32_t l=level;l--;) printf("  ");
+                        printf("  left part touched by multiple projections, going there\n");
+                    }
+                    lengths[currentLevel] = leftLength;
+                    leftLength /= 2;
+                    rightLength = leftLength;
+                    chain[currentLevel] = construct(chain[currentLevel-1] & 0xFFFFFFFFULL, 0);
+                    right[currentLevel] = 0;
+                }
+                if(leftLength == 1) {
+                    if(REPORT) {
+                        for(uint32_t l=level;l--;) printf("  ");
+                        printf("- lvl %u detected leftLength == 1, gloff %u, chain[currentLevel] = %zx\n", currentLevel + 1, globalOffset, chain[currentLevel]);
+                    }
+                    if(level < projection.getProjection(currentProjection).getLengthAndOffsets().getOffsets() - 1) {
+                        if(REPORT) {
+                            for(uint32_t l=level;l--;) printf("  ");
+                            printf("  continues onto another tree\n");
+                        }
+                        uint32_t currentProjectionEnd = currentProjection + 1;
+                        if(currentOffset == nextOffset) {
+                            while(currentProjectionEnd < pEnd && ((nextOffset = projection.getProjection(currentProjectionEnd).getOffset(level).getOffset())) == currentOffset) currentProjectionEnd++;
+                        }
+//                        printf("BEFOR traverse3:\n");
+//                        printf("      currentLevel          = %u:\n", currentLevel);
+//                        printf("      chain[currentLevel]   = %zx:\n", chain[currentLevel]);
+//                        printf("      lengths[currentLevel] = %u:\n", lengths[currentLevel]);
+//                        printf("      leftLength            = %u:\n", leftLength);
+//                        printf("      rightLength           = %u:\n", rightLength);
+//                        printf("      currentProjection     = %u:\n", currentProjection);
+//                        printf("      currentOffset         = %u:\n", currentOffset);
+//                        printf("      currentLength         = %u:\n", currentLength);
+//                        printf("      nextOffset            = %u:\n", nextOffset);
+//                        printf("      nextLength            = %u:\n", nextLength);
+                        IndexInserted newIdx = traverse3(chain[currentLevel], false, projection, currentProjection, currentProjectionEnd, level+1, tb, ts, tbArgs...);
+                        chain[currentLevel] = newIdx.getState().getData();
+                        currentProjection = currentProjectionEnd;
+                        if(currentProjection >= pEnd) {
+                            if(REPORT) {
+                                for(uint32_t l=level;l--;) printf("  ");
+                                printf("  no more projections %u\n", __LINE__);
+                            }
+                            currentOffset = length;
+                            break;
+                        }
+                        currentOffset = nextOffset;
+                        currentLength = projection.getProjection(currentProjection).getLength(level);
+                        lengthToGo = currentLength;
+                        if(currentProjection + 1 < pEnd) {
+                            nextOffset = projection.getProjection(currentProjection + 1).getOffset(level).getOffset();
+                            nextLength = projection.getProjection(currentProjection + 1).getLength(level);
+                        } else {
+                            nextOffset = length;
+                        }
+                    } else {
+                        uint32_t touchedHere = std::min(leftLength + rightLength - currentLocalOffset, lengthToGo);
+                        chain[currentLevel] = (this->*ts)(chain[currentLevel], leftLength + rightLength, currentLocalOffset, touchedHere, tbArgs...);
+                        if(REPORT) printf("currentLocalOffset %u, nextOffset - globalOffset %u\n", currentLocalOffset, nextOffset - globalOffset);
+                        if(nextOffset - globalOffset == 1) {
+                            currentProjection++;
+                            if(REPORT) printf("detected next projection in same leaf-node\n");
+                            chain[currentLevel] = (this->*ts)(chain[currentLevel], leftLength + rightLength, 1, 1, tbArgs...);
+                            currentLength = nextLength - 1;
+                            if(currentLength) {
+                                currentOffset = currentOffset + 2;
+                                lengthToGo = currentLength;
+                                if(REPORT) printf("  projection not done yet, remaining %u, offset %u\n", lengthToGo, currentOffset);
+                            } else {
+                                currentProjection++;
+                                if(currentProjection >= pEnd) {
+                                    if(REPORT) {
+                                        for(uint32_t l = level; l--;) printf("  ");
+                                        if(REPORT) printf("  projection %u done, no more projections %u\n", currentProjection-1, __LINE__);
+                                    }
+                                    currentOffset = length;
+                                    break;
+                                }
+                                currentOffset = projection.getProjection(currentProjection).getOffset(level).getOffset();
+                                currentLength = projection.getProjection(currentProjection).getLength(level);
+                                lengthToGo = currentLength;
+                            }
+                            if(currentProjection + 1 < pEnd) {
+                                nextOffset = projection.getProjection(currentProjection + 1).getOffset(level).getOffset();
+                                nextLength = projection.getProjection(currentProjection + 1).getLength(level);
+                                if(REPORT) printf("  setup current %u %u@%u and next %u@%u\n", currentProjection, currentLength, currentOffset, nextLength, nextOffset);
+                            } else {
+                                nextOffset = length;
+                                if(REPORT) printf("  setup current %u %u@%u and next to finish\n", currentProjection, currentLength, currentOffset);
+                            }
+                        } else {
+                            if(REPORT) printf("next projection is NOT in same leaf-node\n");
+                            lengthToGo -= touchedHere;
+                            if(lengthToGo) {
+                                currentOffset += touchedHere;
+                                currentLength -= touchedHere;
+                                if(REPORT) printf("  projection not done yet, remaining %u, offset %u\n", lengthToGo, currentOffset);
+                            } else {
+                                currentProjection++;
+                                currentOffset = nextOffset;
+                                currentLength = nextLength;
+                                lengthToGo = currentLength;
+                                if(currentProjection + 1 < pEnd) {
+                                    nextOffset = projection.getProjection(currentProjection + 1).getOffset(level).getOffset();
+                                    nextLength = projection.getProjection(currentProjection + 1).getLength(level);
+                                    if(REPORT) printf("  projection %u done, setup current %u %u@%u and next %u@%u\n", currentProjection-1, currentProjection, currentLength, currentOffset, nextLength, nextOffset);
+                                } else {
+                                    nextOffset = length;
+                                    if(REPORT) printf("  projection %u done, setup current %u %u@%u and next to finish\n", currentProjection-1, currentProjection, currentLength, currentOffset);
+                                }
+                            }
+                        }
+                    }
+                    break;
+                }
+            }
+
+            uint32_t spansTo = globalOffset + lengths[currentLevel];
+
+            if(REPORT) {
+                for(uint32_t l=level;l--;) printf("  ");
+                printf("- backtracking chain, spansTo %u+%u=%u, looking for offset %u\n", globalOffset, lengths[currentLevel], spansTo, currentOffset);
+            }
+
+            // If the currentOffset is not within the range of the current sub-tree
+            if(spansTo <= currentOffset) {
+                while(currentLevel > 0) {
+                    uint32_t m = deconstruct(chain[currentLevel], 0);
+                    if(REPORT) {
+                        for(uint32_t l = level; l--;) printf("  ");
+                        printf("  %2u:%x %zx %u\n", currentLevel, m, chain[currentLevel - 1], right[currentLevel]);
+                    }
+                    currentLevel--;
+                    //                memcpy((uint32_t*)&chain[currentLevel - 1] + right[currentLevel], &m, sizeof(m));
+                    chain[currentLevel] = right[currentLevel + 1] ? (((uint64_t) m) << 32) |
+                                                                    (chain[currentLevel] & 0xFFFFFFFFULL)
+                                                                  : (uint64_t) m |
+                                                                    (chain[currentLevel] & 0xFFFFFFFF00000000ULL);
+                    if(right[currentLevel + 1]) {
+                        rightLength += leftLength;
+                        leftLength = lengths[currentLevel] - rightLength;
+                        globalOffset -= leftLength;
+                    } else {
+                        leftLength += rightLength;
+                        rightLength = lengths[currentLevel] - leftLength;
+                        spansTo += rightLength;
+                        if(currentOffset < spansTo) {
+                            if(REPORT) printf("  found path in chain to continue on, spansTo=%u\n", spansTo);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        if(REPORT) {
+            for(uint32_t l = level; l--;) printf("  ");
+            printf("need to backtrack left (we are right in the tree)\n");
+        }
+        while(currentLevel > 0) {
+            uint32_t m = deconstruct(chain[currentLevel], 0);
+            if(REPORT) {
+                for(uint32_t l = level; l--;) printf("  ");
+                printf("  %2u:%x %zx %u\n", currentLevel, m, chain[currentLevel - 1], right[currentLevel]);
+            }
+            currentLevel--;
+            chain[currentLevel] = (((uint64_t) m) << 32) | (chain[currentLevel] & 0xFFFFFFFFULL);
+        }
+        if(REPORT) {
+            for(uint32_t l=level;l--;) printf("  ");
+            printf(">  returning %zx\n", chain[0]);
+        }
+        return IndexInserted(deconstruct(chain[0], 0, length, isRoot && level == 0), length);
+    }
+
+    /**
+     * Traverses the tree, calling traverseP2_construct on parts that are balanced
+     * @param mapped
+     * @param length
+     * @param currentLocalOffset
+     * @param currentLength
+     * @param dest
+     */
+    template<typename TRAVERSE_BALANCED, typename TRAVERSE_SINGLE, typename... ARGS>
+    __attribute__((always_inline))
+    Index traverse4(Index idx, MultiProjection& projection, uint32_t pStart, uint32_t pEnd, uint32_t level, TRAVERSE_BALANCED&& tb, TRAVERSE_SINGLE&& ts, ARGS... tbArgs) {
+//        uint64_t idxWithoutLength = idx.getID();
+//        uint64_t mapped = construct(idxWithoutLength, 0, length, level == 0);
+//        if(REPORT) printf("traverseP2_delta %zx %u %u\n", mapped, length, level);
+//        uint32_t length = idx.getLength();
+//        uint32_t lengthLevel = lengthToLevel(length);
+//        uint32_t leftLength = 1 << lengthLevel;
+//        uint32_t rightLength = length - leftLength;
+//
+//        uint64_t chain[lengthLevel+1];
+//        bool right[lengthLevel+1];
+//        uint32_t lengths[lengthLevel+1];
+//        uint32_t currentLevel = 0;
+//        chain[0] = mapped;
+//        lengths[0] = length;
+//        right[0] = 0;
+//
+//        //       _
+//        // a b c d e f g h
+//        //  1   2   3   4
+//        //    5       6
+//        //       (7)
+//        //
+//        // mappedOriginal = [5 6]
+//        //
+//        // chain[0] = [5 6]   left[0] = ?
+//        // chain[1] = [1 2]   left[1] = 1
+//        // chain[2] = [c D]   left[2] = 0
+//        //
+//
+//        uint32_t currentProjection = pStart;
+//        uint32_t currentProjectionOffset = projection.getProjection(currentProjection).getOffset(level);
+//        uint32_t currentLocalLength = projection.getProjection(currentProjection).getLength(level);
+//        uint32_t projections = projection.getProjections();
+//
+//        uint32_t currentLengthToGo = currentLocalLength;
+//        uint32_t currentLocalOffset = currentProjectionOffset;
+//
+//            for(;leftLength > 1;) {
+//                currentLevel++;
+//                if(leftLength <= currentLocalOffset) {
+//                    if(rightLength == 1) {
+//                        //...
+//                    }
+//                    currentLocalOffset -= leftLength;
+//                    chain[currentLevel] = rightLength;
+//                    leftLength = 1 << lengthToLevel(rightLength);
+//                    rightLength -= leftLength;
+//                    chain[currentLevel] = construct(chain[currentLevel-1] >> 32, 0);
+//                    right[currentLevel] = 1;
+//                } else {
+//                    chain[currentLevel] = leftLength;
+//                    leftLength /= 2;
+//                    rightLength = leftLength;
+//                    chain[currentLevel] = construct(chain[currentLevel-1] & 0xFFFFFFFFULL, 0);
+//                    right[currentLevel] = 0;
+//                }
+//            }
+//            uint32_t left;
+//            if(level < projection.getProjection(currentProjection).getOffsets() - 1) {
+//                uint32_t currentProjectionEnd = currentProjection;
+//                while(currentProjectionEnd < pEnd && (projection.getProjection(currentProjectionEnd).getOffset(level)) == projection.getProjection(0).getOffset(level)) currentProjectionEnd++;
+//                chain[currentLevel] = traverse4(chain[currentLevel], projection, currentProjection, currentProjectionEnd, level+1, tb, ts, tbArgs...);
+//                currentProjection = currentProjectionEnd;
+//                currentLengthToGo = 0;
+//                uint32_t nextProjectionOffset = projection.getProjection(currentProjection).getOffset(level);
+//                currentLocalOffset += nextProjectionOffset - currentProjectionOffset;
+//            } else {
+//                uint32_t relevantLength = 1;
+//                currentLengthToGo -= relevantLength;
+//                currentLocalOffset += relevantLength;
+//                if(currentLengthToGo == 0) {
+//                    currentProjection++;
+//                    uint32_t nextProjectionOffset = projection.getProjection(currentProjection).getOffset(level);
+//                    currentLocalOffset += nextProjectionOffset - currentProjectionOffset;
+//                }
+//            }
+//
+//            if(currentProjection >= pEnd) {
+//                // ...
+//            }
+//
+//            while(currentLevel > 0) {
+//                uint32_t m = deconstruct(chain[currentLevel], 0);
+//                memcpy((uint32_t*) chain[currentLevel - 1] + right[currentLevel], &m, sizeof(m));
+//                if(right[currentLevel]) {
+//                    leftLength *= 2;
+//                    rightLength = leftLength;
+//                } else {
+//                    leftLength += rightLength;
+//                    rightLength = lengths[currentLevel - 1] - leftLength;
+//                    currentLocalOffset += leftLength;
+//                    if(currentLocalOffset) {
+//
+//                    }
+//                }
+//                currentLevel--;
+//            }
+
+    }
 private:
     std::function<void(uint64_t, bool)> _handler_full;
 
