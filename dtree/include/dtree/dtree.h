@@ -977,7 +977,19 @@ public:
      * @brief Construct a new instance.
      * @param rootIndexScale The underlying hash map can maximally hold 2^rootIndexScale 64-bit entries.
      */
-    dtree(): Storage() {
+    dtree(): Storage(), insertedZeroes(false) {
+    }
+
+    std::atomic<bool> insertedZeroes;
+    void checkForInsertedZeroes(uint64_t& idxResult) {
+        if(dtree_unlikely(idxResult == 0ULL)) {
+            if(dtree_unlikely(!insertedZeroes.load(std::memory_order_relaxed))) {
+                bool F = false;
+                if(insertedZeroes.compare_exchange_strong(F, true, std::memory_order_seq_cst)) {
+                    idxResult = 0x8000000000000000ULL;
+                }
+            }
+        }
     }
 
     /**
@@ -1005,6 +1017,7 @@ public:
      */
     IndexInserted insert(uint32_t* data, uint32_t length, bool isRoot) {
         uint64_t result = length == 0 ? 0 : deconstruct(data, length, isRoot);
+        checkForInsertedZeroes(result);
         if(REPORT) printBuffer("Inserted", data, length, result);
         assert(length > 0);
         return IndexInserted(result, length);
@@ -1142,6 +1155,7 @@ public:
     IndexInserted deltaSparse(Index idx, uint32_t* deltaData, uint32_t offsets, Projection offset, bool isRoot) {
         uint32_t length = idx.getLength();
         uint64_t result = deltaSparseApply(idx.getID(), length, 0, deltaData, offsets, offset, isRoot);
+        checkForInsertedZeroes(result);
 
         IndexInserted R(result, length);
         if(REPORT) {
@@ -1156,6 +1170,7 @@ public:
     IndexInserted deltaSparseStride(Index idx, uint32_t* deltaData, uint32_t offsets, uint32_t* offset, uint32_t stride, bool isRoot) {
         uint32_t length = idx.getLength();
         uint64_t result = deltaSparseApply(idx.getID(), length, 0, deltaData, offsets, offset, stride, isRoot);
+        checkForInsertedZeroes(result);
         if(REPORT) {
             uint32_t buffer[length];
             get(result, buffer, isRoot);
@@ -1199,6 +1214,7 @@ public:
             uint32_t level = lengthToLevel(root.getLength());
             result = deconstruct(result, level, root.getLength(), isRoot);
         }
+        checkForInsertedZeroes(result);
         IndexInserted R(result, root.getLength());
         if(REPORT) {
             uint32_t buffer[R.getState().getLength()];
@@ -1308,7 +1324,9 @@ public:
         }
         if constexpr(REPORT) printf("%*c", level*4, ' ');
         if constexpr(REPORT) printf("returning %zx\n", mapped);
-        return IndexInserted(deconstruct(mapped, 0, length, isRoot && level == 0), length);
+        uint64_t result = deconstruct(mapped, 0, length, isRoot && level == 0);
+        checkForInsertedZeroes(result);
+        return IndexInserted(result, length);
     }
 
     /**
@@ -1328,6 +1346,7 @@ public:
         getLength(idx, length);
         uint32_t newLength = std::max(length, (uint64_t)offset + deltaLength);
         uint64_t result = deltaApplyMayExtend(idx.getID(), length, offset, deltaData, deltaLength, isRoot);
+        checkForInsertedZeroes(result);
         if(REPORT) {
             auto R = IndexInserted(result, newLength);
             uint32_t buffer[newLength];
@@ -1363,8 +1382,8 @@ public:
      * @param data
      * @return
      */
-    IndexInserted extend(Index idx, uint32_t alignment, uint32_t deltaLength, uint32_t* data, bool isRoot) {
-        uint32_t length;
+    IndexInserted extend(Index idx, uint32_t alignment, uint32_t deltaLength, uint32_t const* data, bool isRoot) {
+        uint64_t length;
         getLength(idx, length);
         assert(alignment > 0 && "alignment should be at least 1");
         assert((alignment & (alignment-1)) == 0 && "alignment should be power of two");
@@ -1387,7 +1406,7 @@ public:
      * @param data
      * @return
      */
-    IndexInserted extendAt(Index idx, uint32_t offset, uint32_t deltaLength, uint32_t* data, bool isRoot) {
+    IndexInserted extendAt(Index idx, uint32_t offset, uint32_t deltaLength, uint32_t const* data, bool isRoot) {
         uint64_t result;
         uint64_t length;
         getLength(idx, length);
@@ -1398,7 +1417,24 @@ public:
         } else {
             result = extendRecursive(idx.getID(), length, offset, deltaLength, data, isRoot, isRoot);
         }
+        checkForInsertedZeroes(result);
         uint64_t newLength = length + (uint64_t)offset + (uint64_t)deltaLength;
+        if(REPORT) {
+            uint32_t buffer[1 + newLength];
+            buffer[newLength] = 0;
+            get(result, buffer, isRoot);
+            printBuffer("Inserted", buffer, idx.getLength(), result);
+        }
+        return IndexInserted(result, newLength);
+    }
+
+    IndexInserted extend(Index idx, uint32_t extendWith, bool isRoot) {
+        uint64_t result;
+        uint64_t length;
+        getLength(idx, length);
+        result = zeroExtend(idx.getID(), length, length + extendWith, isRoot, isRoot);
+//        checkForInsertedZeroes(result); // not needed because we can only get zeroes if we start with zeroes
+        uint64_t newLength = length + (uint64_t)extendWith;
         if(REPORT) {
             uint32_t buffer[1 + newLength];
             buffer[newLength] = 0;
@@ -2528,6 +2564,10 @@ private:
     uint64_t zeroExtend(uint64_t idx, uint64_t length, uint32_t extendTo, bool isRoot, bool toRoot) {
         if(REPORT) printf("Zero-extending %zx(%zu) to %u\n", idx, length << 2, extendTo << 2);
 
+        if(extendTo == 1) {
+            return idx & 0xFFFFFFFFULL;
+        }
+
         uint32_t level = lengthToLevel(extendTo);
         uint32_t leftLength = 1 << level;
 
@@ -2535,7 +2575,16 @@ private:
         if(extendTo == length) {
             return idx;
         } else if(leftLength == length) {
-            return deconstruct(idx, level, extendTo, toRoot);
+//            return deconstruct(idx, level, extendTo, toRoot);
+            if(REPORT)
+                printf("Detected unchanged part and filling rest with 0s: %zx(%u)\n", idx, leftLength << 2);
+            if(isRoot) {
+                uint64_t mapped = construct(idx, level, length, isRoot);
+                uint32_t left = deconstruct(mapped, level, leftLength, false);
+                return deconstruct((uint64_t) left, level, extendTo, isRoot);
+            } else {
+                return deconstruct(idx, level, extendTo, isRoot);
+            }
         } else if(leftLength < length) {
             uint64_t mapped = construct(idx, level, length, isRoot);
             uint64_t newIndex = mapped & 0xFFFFFFFFULL;
@@ -2766,6 +2815,7 @@ private:
 //        return deconstruct(((uint64_t)rightIndex) << 32 | (uint64_t)newIndex);
 //
 //    }
+
 
     void multiConstruct(Index idx, bool isRoot, MultiProjection& projection, uint32_t level, uint32_t start, uint32_t end, uint32_t* buffer) {
         uint64_t idxWithoutLength = idx.getID();
@@ -4278,7 +4328,9 @@ private:
             for(uint32_t l=level;l--;) printf("  ");
             printf(">  returning %zx\n", chain[0]);
         }
-        return IndexInserted(deconstruct(chain[0], 0, length, isRoot && level == 0), length);
+        uint64_t result = deconstruct(chain[0], 0, length, isRoot && level == 0);
+        checkForInsertedZeroes(result);
+        return IndexInserted(result, length);
     }
 
     /**

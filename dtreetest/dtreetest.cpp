@@ -3,7 +3,8 @@
 #include <dtreetest/dtreetest.h>
 #include <libfrugi/Settings.h>
 
-#include "wrappers.h"
+//#include "wrappers.h"
+#include <dtree/dtree.h>
 
 using namespace libfrugi;
 
