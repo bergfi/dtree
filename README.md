@@ -4,11 +4,12 @@ Dtree is a concurrent compression tree for storing vectors.
 
 # Build
 
-Clone the repository and then:
+Dtree is a header-only library. To build the test, clone the repository and:
 
 ```
 mkdir build && cd build
-cmake .. -DWITH_LIBFRUGI=/path/to/libfrugi -DWITH_LTSMIN=/path/to/ltsmin/install/directory
+cmake .. -DDTREE_INCLUDE_TEST=1
+make
 ```
-- For libfrugi, see https://github.com/bergfi/libfrugi
-- For LTSmin, see https://github.com/utwente-fmt/ltsmin
+
+See dtreetest.cpp for the options available.
