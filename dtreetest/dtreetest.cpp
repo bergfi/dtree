@@ -19,7 +19,7 @@ void runTest(std::string const& name) {
     } else if(name == "dtree.sr") {
         dtreeTest<dtree<SeparateRootSingleHashSet<HashSet128<RehasherExit, Linear>, HashSet<RehasherExit, Linear> > > > (settings["buckets_scale"].asUnsignedValue()).go();
     } else {
-        printf("No compression data structure selected\n");
+        printf("No such compression data structure: %s\n", name.c_str());
     }
 }
 
@@ -38,7 +38,6 @@ int main(int argc, char** argv) {
 
     int c = 0;
     while ((c = getopt(argc, argv, "i:c:d:s:t:T:p:-:")) != -1) {
-//    while ((c = getopt_long(argc, argv, "i:d:s:t:T:p:-:", long_options, &option_index)) != -1) {
         switch(c) {
             case 't':
                 if(optarg) {
@@ -77,11 +76,14 @@ int main(int argc, char** argv) {
     }
 
     int htindex = optind;
-    while(argv[htindex]) {
-        runTest(std::string(argv[htindex]));
-        ++htindex;
+    if(htindex < argc) {
+        while(argv[htindex]) {
+            runTest(std::string(argv[htindex]));
+            ++htindex;
+        }
+    } else {
+        printf("No compression data structure selected\n");
     }
-
 
     return 0;
 }
