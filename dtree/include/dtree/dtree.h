@@ -1559,7 +1559,7 @@ private:
     __attribute__((always_inline))
     uint64_t deconstruct(uint64_t v, uint32_t level, uint64_t length, bool isRoot) {
 //        if(v==0ULL) return 0;
-        uint64_t idx = this->template storage_fop(v, level, length, isRoot);
+        uint64_t idx = this->storage_fop(v, level, length, isRoot);
 #ifndef NDEBUG
         if(idx == Storage::NotFound()) {
             _handler_full(v, isRoot);
@@ -1574,7 +1574,7 @@ private:
     __attribute__((always_inline))
     uint64_t deconstruct(uint64_t v, uint32_t level) {
 //        if(v==0ULL) return 0;
-        uint64_t idx = this->template storage_fop(v, level, 2, false);
+        uint64_t idx = this->storage_fop(v, level, 2, false);
 #ifndef NDEBUG
         if(idx == Storage::NotFound()) {
             _handler_full(v, false);
@@ -1589,14 +1589,14 @@ private:
     __attribute__((always_inline))
     uint64_t findRecursing(uint64_t v, uint32_t level, uint64_t length, bool isRoot = false) {
 //        if(v==0ULL) return 0ULL;
-        uint64_t idx = this->template storage_find(v, level, length, isRoot);
+        uint64_t idx = this->storage_find(v, level, length, isRoot);
         return idx;
     }
 
     __attribute__((always_inline))
     uint64_t construct(uint64_t idx, uint32_t level, uint64_t& length, bool isRoot = false) {
 //        if(idx == 0) return 0;
-        uint64_t mapped = this->template storage_get(idx, level, length, isRoot);
+        uint64_t mapped = this->storage_get(idx, level, length, isRoot);
 //        assert(mapped != Storage::NotFound() && "Cannot construct: index is not in the map");
         if(REPORT) printf("Got %8zx(%u) -> %16zx (%s)\n", idx, 8, mapped, isRoot ? "root":"");
         return mapped;
@@ -1606,7 +1606,7 @@ private:
     uint64_t construct(uint64_t idx, uint32_t level, bool isRoot = false) {
 //        if(idx == 0) return 0;
         uint64_t g;
-        uint64_t mapped = this->template storage_get(idx, level, g, isRoot);
+        uint64_t mapped = this->storage_get(idx, level, g, isRoot);
 //        assert(mapped != Storage::NotFound() && "Cannot construct: index is not in the map");
         if(REPORT) printf("Got %8zx(%u) -> %16zx (%s)\n", idx, 8, mapped, isRoot ? "root":"");
         return mapped;
