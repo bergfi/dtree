@@ -1,3 +1,22 @@
+/*
+ * Dtree - a concurrent compression tree for variable-length vectors
+ * Copyright © 2018-2021 Freark van der Berg
+ *
+ * This file is part of Dtree.
+ *
+ * Dtree is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, version 3 of the License.
+ *
+ * Dtree is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with Dtree.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
 #pragma once
 
 #include <atomic>

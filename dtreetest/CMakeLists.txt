@@ -3,7 +3,7 @@ include(FetchContent)
 FetchContent_Declare(
     libfrugi
     GIT_REPOSITORY https://github.com/bergfi/libfrugi.git
-    GIT_TAG        a88ef3e543802c0119ae29006c724915a36c0ee9
+    GIT_TAG        6dce992af08f56b8d20f4612ec86dbb45300e631
 )
 FetchContent_MakeAvailable(libfrugi)
 
