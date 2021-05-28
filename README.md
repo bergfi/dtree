@@ -1,3 +1,5 @@
+![CMake result](https://github.com/bergfi/dtree/actions/workflows/master.yml/badge.svg)
+
 # Dtree
 
 Dtree is a concurrent compression tree for storing vectors.
